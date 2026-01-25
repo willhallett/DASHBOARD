@@ -202,6 +202,51 @@
     .footer-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
     a { color: var(--ink); }
 
+    body.print-preview {
+      background: #ffffff;
+      color: #1f2234;
+    }
+    body.print-preview header {
+      position: static;
+      backdrop-filter: none;
+      background: #ffffff;
+    }
+    body.print-preview .controls,
+    body.print-preview button,
+    body.print-preview .inlineForm,
+    body.print-preview .del {
+      display: none !important;
+    }
+    body.print-preview input,
+    body.print-preview textarea,
+    body.print-preview select {
+      border: none;
+      background: transparent;
+      padding: 0;
+      color: #1f2234;
+      box-shadow: none;
+    }
+    body.print-preview .card {
+      box-shadow: none;
+    }
+
+    @media print {
+      header,
+      .controls,
+      button,
+      .inlineForm,
+      .del {
+        display: none !important;
+      }
+      body {
+        background: #ffffff;
+        color: #1f2234;
+      }
+      .card {
+        box-shadow: none;
+      }
+    }
+
     /* Toast */
     .toast {
       position: fixed;
@@ -247,7 +292,7 @@
     }
     canvas#forestCanvas {
       width: 100%;
-      height: 520px; /* increased height to fit crowns + subterrain */
+      height: 680px; /* taller to show mycelium network beneath labels */
       display: block;
       border-radius: 12px;
       background: rgba(255,255,255,0.35);
@@ -265,6 +310,17 @@
     .forestLegend.show { display: block; }
     .forestLegend b { color: var(--ink); }
     .forestLegend code { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+
+    /* Concept graph */
+    #conceptGraphCanvas {
+      width: 100%;
+      height: 320px;
+      display: block;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.45);
+      border: 1px dashed rgba(58,61,94,.2);
+    }
+    .graphHint { font-size: 12px; color: var(--muted); margin-top: 8px; }
   </style>
 </head>
 
@@ -287,6 +343,7 @@
       <button class="btn-secondary" id="btnResetDay">Reset “Day” checkboxes</button>
       <button class="btn-secondary" id="btnResetWeek">Reset “Week” checkboxes</button>
       <button class="btn-secondary" id="btnBackup">Export JSON backup</button>
+      <button class="btn-secondary" id="btnPrintPreview">Print preview</button>
       <button class="btn-danger" id="btnHardReset">Hard reset (wipe local)</button>
     </div>
   </div>
@@ -383,6 +440,10 @@
           <button class="btn-secondary" id="btnExportPNG" title="Download forest as PNG">Export PNG</button>
           <button class="btn-secondary" id="btnExportSVG" title="Download forest as SVG">Export SVG</button>
           <button class="btn-secondary" id="btnClearGhost" title="Clear last-week ghost overlay">Clear ghost</button>
+          <label class="chip tight" style="padding:6px 10px;">
+            <input type="checkbox" id="toggleHiResPng" />
+            Hi-res PNG
+          </label>
         </div>
 
         <canvas id="forestCanvas"></canvas>
@@ -422,57 +483,68 @@
     <!-- Writing sessions -->
     <section class="card">
       <div class="section-title">
-        <h2>Writing Sessions</h2>
+        <h2>GCAS Writing</h2>
         <div class="hint">Light, consistent, non-sprawling</div>
       </div>
 
-      <label>GCAS / thesis micro-session template</label>
-      <textarea id="writingTemplate" placeholder="Prompt, constraint, and output shape. e.g., 45 min: 1 paragraph synthesis + 3 citations-to-check. No perfection."></textarea>
-
       <div class="cols" style="margin-top:10px;">
         <div>
-          <label>Weekly writing cadence</label>
-          <input type="text" id="writingCadence" placeholder="e.g., 2× 45min (Tue/Thu) + 1× 2hr (Sun optional)" />
+          <label>GCAS schedule</label>
+          <input type="text" id="writingSchedule" placeholder="e.g., Tue/Thu afternoons" />
         </div>
         <div>
           <label>Current writing thread</label>
           <input type="text" id="writingThread" placeholder="e.g., Neural Set; Saussure/Lacan; modeling epistemology" />
         </div>
         <div>
-          <label>Next tiny output</label>
-          <input type="text" id="writingOutput" placeholder="e.g., 300–600 words + 5 bullets for future paper" />
+          <label>GCAS targets</label>
+          <input type="text" id="writingTargets" placeholder="e.g., 300 words target; Badiou set theory; Freud neurobiology" />
         </div>
       </div>
+      <label style="margin-top:12px;">GCAS notes</label>
+      <textarea id="writingNotes" placeholder="Short synthesis, questions, or conceptual bridges to keep."></textarea>
+      <div class="footer-note">Keep cadence and conceptual targets lightweight but explicit.</div>
+    </section>
 
+    <!-- Concept graph -->
+    <section class="card" style="grid-column: 1 / 2;">
+      <div class="section-title">
+        <h2>Concept Graph (3D)</h2>
+        <div class="hint">Major concepts and linkages across writing</div>
+      </div>
+      <canvas id="conceptGraphCanvas" aria-label="3D concept linkage graph"></canvas>
       <div class="row" style="margin-top:10px;">
-        <button id="btnShowWritingForm">+ Log a writing session</button>
-        <button class="btn-secondary" id="btnClearWritingLog">Clear log</button>
+        <button class="btn-secondary" id="btnRegenGraph">Regenerate graph</button>
+      </div>
+      <div class="graphHint">Drag to rotate; scroll to zoom. Nodes are inferred from all writing artifacts.</div>
+    </section>
+
+    <!-- Prose writing -->
+    <section class="card" style="grid-column: 2 / 3;">
+      <div class="section-title">
+        <h2>Prose Writing</h2>
+        <div class="hint">Drafts, reflections, and narrative output</div>
       </div>
 
-      <!-- Inline writing log form -->
-      <div id="writingForm" class="inlineForm" aria-live="polite">
-        <div class="cols">
-          <div>
-            <label>Minutes</label>
-            <input type="number" id="writingMinutes" min="0" step="5" value="45" />
-          </div>
-          <div>
-            <label>Output (short)</label>
-            <input type="text" id="writingOutputShort" placeholder="e.g., 1 paragraph synthesis" />
-          </div>
-          <div>
-            <label>Notes (optional)</label>
-            <input type="text" id="writingNotesShort" placeholder="e.g., cite-check X; question Y" />
-          </div>
+      <div class="cols" style="margin-top:10px;">
+        <div>
+          <label>Prose schedule</label>
+          <input type="text" id="proseSchedule" placeholder="e.g., Wed/Fri afternoons" />
         </div>
-        <div class="row" style="margin-top:10px;">
-          <button id="btnSaveWritingSession">Save session</button>
-          <button class="btn-secondary" id="btnCancelWritingForm">Cancel</button>
+        <div>
+          <label>Current prose project</label>
+          <input type="text" id="proseProject" placeholder="e.g., Semester reflection essay; narrative recap" />
+        </div>
+        <div>
+          <label>Prose targets</label>
+          <input type="text" id="proseTargets" placeholder="e.g., 300 words; draft scene; revision focus" />
         </div>
       </div>
 
-      <div id="writingLog" style="margin-top:10px;"></div>
-      <div class="footer-note">Logging is optional; it’s mainly for continuity + guilt reduction.</div>
+      <label style="margin-top:12px;">Prose notes</label>
+      <textarea id="proseNotes" placeholder="Short notes, tone cues, or narrative beats to keep." ></textarea>
+
+      <div class="footer-note">Separate from GCAS; keep prose constraints visible.</div>
     </section>
   </div>
 
@@ -506,6 +578,7 @@
         <button id="btnGenerateMd">Generate Markdown</button>
         <button class="btn-secondary" id="btnCopyMd">Copy</button>
         <button class="btn-secondary" id="btnDownloadMd">Download .md</button>
+        <button class="btn-secondary" id="btnArchiveBundle">Archive bundle</button>
       </div>
 
       <label style="margin-top:12px;">Markdown preview</label>
@@ -525,7 +598,7 @@
 <script>
   // ---------- Version + migration ----------
   const STORAGE_KEY = "semester_dashboard_v1";
-  const CURRENT_VERSION = 4; // bumped for organic mycelium + full-width forest + dynamic stress/modes
+  const CURRENT_VERSION = 7; // bumped for concept graph + schedule inputs
 
   const DEFAULT = {
     version: CURRENT_VERSION,
@@ -568,20 +641,29 @@
     todayTasks: [],
     weekendTasks: [],
 
-    writingTemplate: "45 min: 1 paragraph synthesis + 3 citations-to-check. No perfection.",
-    writingCadence: "2× 45min (Tue/Thu) + 1× 2hr (Sun optional)",
+    writingSchedule: "Tue/Thu afternoons",
     writingThread: "",
-    writingOutput: "",
-    writingLog: [],
+    writingTargets: "300 words target; Badiou set theory; Freud neurobiology",
+    writingNotes: "",
+
+    proseSchedule: "Wed/Fri afternoons",
+    proseProject: "",
+    proseTargets: "300 words; draft scene; revision focus",
+    proseNotes: "",
+
+    env: null,
 
     downtimeRule: "",
     mdCache: "",
+    lastExport: null,
+    printPreview: false,
 
     // Forest
     forest: {
       legendOn: false,
       weekId: "",
       perCourseMax: {},   // max-memory for writing volume / syntax / cohesion / completed tasks
+      hiResPng: false,
     }
   };
 
@@ -609,6 +691,27 @@
         }
       }
       s.version = 4;
+    }
+    if (v < 5) {
+      s.proseProject = s.proseProject ?? "";
+      s.proseNotes = s.proseNotes ?? "";
+      s.version = 5;
+    }
+    if (v < 6) {
+      s.lastExport = s.lastExport ?? null;
+      s.printPreview = s.printPreview ?? false;
+      s.forest = s.forest || structuredDefault().forest;
+      s.forest.hiResPng = s.forest.hiResPng ?? false;
+      s.version = 6;
+    }
+    if (v < 7) {
+      s.writingSchedule = s.writingSchedule ?? structuredDefault().writingSchedule;
+      s.writingTargets = s.writingTargets ?? structuredDefault().writingTargets;
+      s.writingNotes = s.writingNotes ?? "";
+      s.proseSchedule = s.proseSchedule ?? structuredDefault().proseSchedule;
+      s.proseTargets = s.proseTargets ?? structuredDefault().proseTargets;
+      s.env = s.env ?? null;
+      s.version = 7;
     }
     return s;
   }
@@ -673,16 +776,17 @@
   const courseListEl = el("courseList");
   const courseCardsEl = el("courseCards");
 
-  const writingTemplateEl = el("writingTemplate");
-  const writingCadenceEl = el("writingCadence");
+  const writingScheduleEl = el("writingSchedule");
   const writingThreadEl = el("writingThread");
-  const writingOutputEl = el("writingOutput");
-  const writingLogEl = el("writingLog");
+  const writingTargetsEl = el("writingTargets");
+  const writingNotesEl = el("writingNotes");
 
-  const writingFormEl = el("writingForm");
-  const writingMinutesEl = el("writingMinutes");
-  const writingOutputShortEl = el("writingOutputShort");
-  const writingNotesShortEl = el("writingNotesShort");
+  const proseScheduleEl = el("proseSchedule");
+  const proseProjectEl = el("proseProject");
+  const proseTargetsEl = el("proseTargets");
+  const proseNotesEl = el("proseNotes");
+  const conceptGraphCanvas = el("conceptGraphCanvas");
+  const btnRegenGraph = el("btnRegenGraph");
 
   const weekendTasksEl = el("weekendTasks");
   const downtimeRuleEl = el("downtimeRule");
@@ -692,6 +796,7 @@
   // Forest elements
   const forestCanvas = el("forestCanvas");
   const forestLegendEl = el("forestLegend");
+  const toggleHiResPngEl = el("toggleHiResPng");
 
   // ---------- Utilities ----------
   function escapeHtml(s) {
@@ -829,6 +934,7 @@
       focus.addEventListener("input", () => {
         state.courseNotes[course].focus = focus.value;
         saveState();
+        debouncedGraph();
       });
       col2.appendChild(focus);
 
@@ -841,6 +947,7 @@
       budget.addEventListener("input", () => {
         state.courseNotes[course].budget = budget.value;
         saveState();
+        debouncedGraph();
       });
       col3.appendChild(budget);
 
@@ -859,6 +966,7 @@
         state.courseNotes[course].notes = notes.value;
         saveState();
         debouncedForest(); // update forest as you write
+        debouncedGraph();
       });
       card.appendChild(notes);
 
@@ -957,37 +1065,189 @@
     state.weekendTasks.forEach((t) => weekendTasksEl.appendChild(taskRow(t, "weekendTasks")));
   }
 
-  function renderWritingLog() {
-    writingLogEl.innerHTML = "";
-    if (!state.writingLog.length) {
-      const empty = document.createElement("div");
-      empty.className = "mini";
-      empty.textContent = "No sessions logged yet.";
-      writingLogEl.appendChild(empty);
+  // ---------- Concept graph ----------
+  let graphState = null;
+
+  function collectWritingCorpus() {
+    const parts = [];
+    if (state.todayNotes) parts.push(state.todayNotes);
+    state.courses.forEach((course) => {
+      const c = state.courseNotes[course] || {};
+      if (c.focus) parts.push(c.focus);
+      if (c.budget) parts.push(c.budget);
+      if (c.notes) parts.push(c.notes);
+    });
+    if (state.writingSchedule) parts.push(state.writingSchedule);
+    if (state.writingThread) parts.push(state.writingThread);
+    if (state.writingTargets) parts.push(state.writingTargets);
+    if (state.writingNotes) parts.push(state.writingNotes);
+    if (state.proseSchedule) parts.push(state.proseSchedule);
+    if (state.proseProject) parts.push(state.proseProject);
+    if (state.proseTargets) parts.push(state.proseTargets);
+    if (state.proseNotes) parts.push(state.proseNotes);
+    return normalizeText(parts.join(" "));
+  }
+
+  function computeConceptGraph() {
+    const corpus = collectWritingCorpus();
+    if (!corpus) return { nodes: [], edges: [] };
+    const keywords = topNWords(corpus, 16).map(x => x.w);
+    const nodes = keywords.map((w) => ({
+      id: w,
+      label: w,
+      x: (Math.random() - 0.5) * 1.6,
+      y: (Math.random() - 0.5) * 1.6,
+      z: (Math.random() - 0.5) * 1.6,
+      size: 6
+    }));
+    const edges = [];
+    const sentences = splitSentences(corpus);
+    const keywordSet = new Set(keywords);
+    const edgeMap = new Map();
+
+    sentences.forEach((sentence) => {
+      const words = contentWords(sentence);
+      const present = Array.from(new Set(words.filter((w) => keywordSet.has(w))));
+      for (let i = 0; i < present.length; i++) {
+        for (let j = i + 1; j < present.length; j++) {
+          const key = [present[i], present[j]].sort().join("|");
+          edgeMap.set(key, (edgeMap.get(key) || 0) + 1);
+        }
+      }
+    });
+
+    const degree = new Map();
+    for (const [pair, weight] of edgeMap.entries()) {
+      const [a, b] = pair.split("|");
+      edges.push({ a, b, weight });
+      degree.set(a, (degree.get(a) || 0) + weight);
+      degree.set(b, (degree.get(b) || 0) + weight);
+    }
+
+    nodes.forEach((node) => {
+      node.size = 6 + Math.min(10, (degree.get(node.id) || 1) * 0.6);
+    });
+
+    return { nodes, edges };
+  }
+
+  function projectPoint(node, rotX, rotY, zoom, w, h) {
+    let { x, y, z } = node;
+    const cosY = Math.cos(rotY);
+    const sinY = Math.sin(rotY);
+    const cosX = Math.cos(rotX);
+    const sinX = Math.sin(rotX);
+
+    const dx = x * cosY - z * sinY;
+    const dz = x * sinY + z * cosY;
+    const dy = y * cosX - dz * sinX;
+    const dz2 = y * sinX + dz * cosX;
+
+    const perspective = zoom / (zoom + dz2 + 2.2);
+    return {
+      x: w / 2 + dx * w * 0.25 * perspective,
+      y: h / 2 + dy * h * 0.25 * perspective,
+      scale: perspective
+    };
+  }
+
+  function renderConceptGraph() {
+    if (!conceptGraphCanvas) return;
+    if (!graphState) {
+      graphState = {
+        data: computeConceptGraph(),
+        rotX: -0.25,
+        rotY: 0.25,
+        zoom: 2.4,
+        dragging: false,
+        lastX: 0,
+        lastY: 0
+      };
+      attachGraphHandlers();
+      requestAnimationFrame(drawConceptGraph);
+    } else {
+      graphState.data = computeConceptGraph();
+    }
+  }
+
+  function attachGraphHandlers() {
+    conceptGraphCanvas.addEventListener("mousedown", (e) => {
+      graphState.dragging = true;
+      graphState.lastX = e.clientX;
+      graphState.lastY = e.clientY;
+    });
+    window.addEventListener("mouseup", () => {
+      if (graphState) graphState.dragging = false;
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!graphState?.dragging) return;
+      const dx = e.clientX - graphState.lastX;
+      const dy = e.clientY - graphState.lastY;
+      graphState.rotY += dx * 0.005;
+      graphState.rotX += dy * 0.005;
+      graphState.lastX = e.clientX;
+      graphState.lastY = e.clientY;
+    });
+    conceptGraphCanvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      graphState.zoom = clamp(graphState.zoom + e.deltaY * 0.004, 1.0, 12);
+    }, { passive: false });
+    btnRegenGraph?.addEventListener("click", () => {
+      graphState.data = computeConceptGraph();
+      toast("Regenerated concept graph");
+    });
+  }
+
+  function drawConceptGraph() {
+    if (!conceptGraphCanvas || !graphState) return;
+    const { ctx, w, h } = initCanvasHiDPI(conceptGraphCanvas);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.fillRect(0, 0, w, h);
+
+    const { nodes, edges } = graphState.data;
+    if (!nodes.length) {
+      ctx.fillStyle = "#8b8c9b";
+      ctx.font = "12px " + getCSSVar("--sans");
+      ctx.textAlign = "center";
+      ctx.fillText("No writing data yet to generate concepts.", w / 2, h / 2);
+      requestAnimationFrame(drawConceptGraph);
       return;
     }
-    state.writingLog.slice().reverse().forEach((w) => {
-      const box = document.createElement("div");
-      box.className = "task";
-      box.style.gridTemplateColumns = "1fr 120px 34px";
-      const left = document.createElement("div");
-      left.innerHTML = `<div style="font-weight:700;margin-bottom:4px;">${escapeHtml(w.output || "Writing session")}</div>
-                        <div class="mini">${escapeHtml(w.notes || "")}</div>`;
-      const mid = document.createElement("div");
-      mid.innerHTML = `<div class="pill">${escapeHtml(w.date || "")}</div><div class="mini">${w.minutes || 0} min</div>`;
-      const del = document.createElement("button");
-      del.className = "del";
-      del.textContent = "×";
-      del.addEventListener("click", () => {
-        state.writingLog = state.writingLog.filter(x => x.id !== w.id);
-        saveState();
-        renderWritingLog();
-        renderWeekSummary();
-        debouncedForest();
-      });
-      box.appendChild(left); box.appendChild(mid); box.appendChild(del);
-      writingLogEl.appendChild(box);
+
+    const projections = new Map();
+    nodes.forEach((node) => {
+      projections.set(node.id, projectPoint(node, graphState.rotX, graphState.rotY, graphState.zoom, w, h));
     });
+
+    ctx.strokeStyle = "rgba(58,61,94,0.25)";
+    edges.forEach((edge) => {
+      const a = projections.get(edge.a);
+      const b = projections.get(edge.b);
+      if (!a || !b) return;
+      ctx.lineWidth = Math.max(0.6, edge.weight * 0.6);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    });
+
+    nodes.forEach((node) => {
+      const p = projections.get(node.id);
+      if (!p) return;
+      const radius = node.size * p.scale;
+      ctx.fillStyle = "#111111";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#111111";
+      ctx.font = `${Math.max(9, 10 * p.scale)}px ${getCSSVar("--sans")}`;
+      ctx.textAlign = "center";
+      ctx.fillText(node.label, p.x, p.y - radius - 4);
+    });
+
+    graphState.rotY += 0.0015;
+    requestAnimationFrame(drawConceptGraph);
   }
 
   // ---------- Week summary ----------
@@ -1037,10 +1297,350 @@
     return `[[${safe}]]`;
   }
 
+  function slugTag(word) {
+    return String(word || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  const KEYWORD_SKIP = new Set([
+    "make","made","making","made","need","needs","needed","want","wants","wanted",
+    "good","better","best","bad","worse","worst","thing","things","stuff","like",
+    "use","used","using","get","got","getting","should","could","would","might"
+  ]);
+
+  function titleCase(word) {
+    const s = String(word || "");
+    return s ? s[0].toUpperCase() + s.slice(1) : "";
+  }
+
+  function keyPhrases(text, n = 6) {
+    const sentences = splitSentences(text);
+    const freq = new Map();
+    sentences.forEach((sentence) => {
+      const words = contentWords(sentence);
+      for (let i = 0; i < words.length; i++) {
+        for (let size = 2; size <= 4; size++) {
+          const slice = words.slice(i, i + size);
+          if (slice.length < size) continue;
+          const phrase = slice.join(" ");
+          if (KEYWORD_SKIP.has(phrase)) continue;
+          freq.set(phrase, (freq.get(phrase) || 0) + 1);
+        }
+      }
+    });
+    return Array.from(freq.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([phrase]) => phrase)
+      .slice(0, n);
+  }
+
+  function noteKeywords(text, n = 6) {
+    return keyPhrases(text, n);
+  }
+
+  function titleCasePhrase(phrase) {
+    return phrase.split(" ").map(titleCase).join(" ");
+  }
+
+  function noteTitleFromKeywords(keywords) {
+    if (!keywords.length) return "Untitled Note";
+    return keywords.slice(0, 2).map(titleCasePhrase).join(" · ");
+  }
+
+  function extractProperNouns(text, n = 6) {
+    const raw = String(text || "");
+    const matches = raw.match(/\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/g) || [];
+    const extras = raw.match(/\b\d{1,2}(?:st|nd|rd|th)\s+century\b/gi) || [];
+    const seen = new Set();
+    const out = [];
+    [...matches, ...extras].forEach((m) => {
+      const cleaned = m.trim();
+      if (!cleaned || cleaned.length < 3) return;
+      if (STOP.has(cleaned.toLowerCase())) return;
+      const key = cleaned.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(cleaned);
+      }
+    });
+    return out.slice(0, n);
+  }
+
+  function formatProperNounTags(text) {
+    return extractProperNouns(text, 8)
+      .map((name) => slugTag(name))
+      .filter(Boolean)
+      .map((tag) => `#${tag}`);
+  }
+
+  function percent(n) {
+    return `${Math.round(n * 100)}%`;
+  }
+
+  function forestPngDataUrl(scale = 1) {
+    renderForest();
+    const src = forestCanvas;
+    if (scale <= 1) return src.toDataURL("image/png");
+    const rect = src.getBoundingClientRect();
+    const w = Math.max(1, Math.floor(rect.width));
+    const h = Math.max(1, Math.floor(rect.height));
+    const tmp = document.createElement("canvas");
+    tmp.width = Math.floor(w * scale);
+    tmp.height = Math.floor(h * scale);
+    const tctx = tmp.getContext("2d");
+    tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
+    return tmp.toDataURL("image/png");
+  }
+
+  function exportForestPngForMarkdown(dateISO, hiRes) {
+    try {
+      const filename = `forest_${dateISO}${hiRes ? "_hires" : ""}.png`;
+      const url = forestPngDataUrl(hiRes ? 2 : 1);
+      downloadDataUrl(filename, url);
+      return filename;
+    } catch {
+      return "";
+    }
+  }
+
+  function formatDelta(delta) {
+    const pct = Math.round(delta * 100);
+    if (!pct) return "0%";
+    return `${pct > 0 ? "+" : ""}${pct}%`;
+  }
+
+  function crc32(buf) {
+    const table = crc32.table || (crc32.table = (() => {
+      const t = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) {
+          c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        }
+        t[i] = c >>> 0;
+      }
+      return t;
+    })());
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+      crc = table[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function textToUint8(text) {
+    return new TextEncoder().encode(text);
+  }
+
+  function dataUrlToUint8(dataUrl) {
+    const [meta, data] = dataUrl.split(",");
+    const isBase64 = meta.includes(";base64");
+    if (!isBase64) return textToUint8(decodeURIComponent(data));
+    const bin = atob(data);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  }
+
+  function zipFiles(files) {
+    const records = [];
+    let offset = 0;
+
+    files.forEach((file) => {
+      const nameBytes = textToUint8(file.name);
+      const data = file.data;
+      const crc = crc32(data);
+      const localHeader = new Uint8Array(30 + nameBytes.length);
+      const view = new DataView(localHeader.buffer);
+      view.setUint32(0, 0x04034b50, true);
+      view.setUint16(4, 20, true);
+      view.setUint16(6, 0, true);
+      view.setUint16(8, 0, true);
+      view.setUint16(10, 0, true);
+      view.setUint16(12, 0, true);
+      view.setUint32(14, crc, true);
+      view.setUint32(18, data.length, true);
+      view.setUint32(22, data.length, true);
+      view.setUint16(26, nameBytes.length, true);
+      view.setUint16(28, 0, true);
+      localHeader.set(nameBytes, 30);
+
+      const centralHeader = new Uint8Array(46 + nameBytes.length);
+      const cview = new DataView(centralHeader.buffer);
+      cview.setUint32(0, 0x02014b50, true);
+      cview.setUint16(4, 20, true);
+      cview.setUint16(6, 20, true);
+      cview.setUint16(8, 0, true);
+      cview.setUint16(10, 0, true);
+      cview.setUint16(12, 0, true);
+      cview.setUint16(14, 0, true);
+      cview.setUint32(16, crc, true);
+      cview.setUint32(20, data.length, true);
+      cview.setUint32(24, data.length, true);
+      cview.setUint16(28, nameBytes.length, true);
+      cview.setUint16(30, 0, true);
+      cview.setUint16(32, 0, true);
+      cview.setUint16(34, 0, true);
+      cview.setUint16(36, 0, true);
+      cview.setUint32(38, 0, true);
+      cview.setUint32(42, offset, true);
+      centralHeader.set(nameBytes, 46);
+
+      records.push({ localHeader, data, centralHeader });
+      offset += localHeader.length + data.length;
+    });
+
+    const centralSize = records.reduce((sum, r) => sum + r.centralHeader.length, 0);
+    const end = new Uint8Array(22);
+    const endView = new DataView(end.buffer);
+    endView.setUint32(0, 0x06054b50, true);
+    endView.setUint16(4, 0, true);
+    endView.setUint16(6, 0, true);
+    endView.setUint16(8, records.length, true);
+    endView.setUint16(10, records.length, true);
+    endView.setUint32(12, centralSize, true);
+    endView.setUint32(16, offset, true);
+    endView.setUint16(20, 0, true);
+
+    const totalSize = offset + centralSize + end.length;
+    const out = new Uint8Array(totalSize);
+    let ptr = 0;
+    records.forEach((r) => {
+      out.set(r.localHeader, ptr);
+      ptr += r.localHeader.length;
+      out.set(r.data, ptr);
+      ptr += r.data.length;
+    });
+    records.forEach((r) => {
+      out.set(r.centralHeader, ptr);
+      ptr += r.centralHeader.length;
+    });
+    out.set(end, ptr);
+    return out;
+  }
+
+  function downloadBlob(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function wordCount(text) {
+    return String(text || "").trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  function enforceWordCount(text, target) {
+    let words = String(text || "").trim().split(/\s+/).filter(Boolean);
+    const filler = [
+      "The argument would benefit from clearer operational definitions and a sharper distinction between descriptive claims and interpretive stakes.",
+      "Methodologically, a tighter articulation of evidence warrants would strengthen the transition from observation to inference.",
+      "The conceptual framing aligns with literature on knowledge-building communities and warrants further triangulation with empirical traces.",
+      "I encourage foregrounding how the analytic lens translates into concrete revision decisions for the next iteration."
+    ];
+    let i = 0;
+    while (words.length < target) {
+      words = words.concat(filler[i % filler.length].split(/\s+/));
+      i += 1;
+    }
+    if (words.length > target) words = words.slice(0, target);
+    return words.join(" ");
+  }
+
+  function buildConferenceResponse(context) {
+    const keywords = context.keywords.length ? context.keywords.join(", ") : "core concepts";
+    const linkage = context.linkages.length ? context.linkages.join("; ") : "the dominant nodes cohere around a small set of recurring ideas";
+    const keystone = context.keystone || "the keystone course";
+    const sentences = [
+      `This archive reads as a coherent semester-long knowledge-building project with ${keystone} functioning as the main organizing axis.`,
+      `Across the corpus, the dominant conceptual signals include ${keywords}, which recur in ways that suggest a stable thematic spine rather than a loose topical drift.`,
+      `The linkage structure is consistent with a networked-learning model in which local ideas are continuously reactivated and recombined: ${linkage}.`,
+      `From the standpoint of cognitive load theory, the alternation between consolidation and expansion is healthy, and the current pattern indicates productive strain rather than overload.`,
+      `The forest narrative of complexity is instructive here: ${context.complexityTrend} ${context.distribution}`,
+      `In terms of writing studies and genre theory, the project reads like a movement from exploratory synthesis toward a more situated, audience-aware register.`,
+      `I also hear echoes of conceptual change theory: you are not merely adding facts but reconfiguring explanatory frames as the semester progresses.`,
+      `If we locate the work within systems thinking and activity theory, the most promising thread is the way methods, concepts, and tasks mutually condition one another rather than sitting in isolation.`,
+      `For the next revision, I would recommend an explicit through-line that names the key problem space and repeatedly ties new observations back to it.`,
+      `Doing so will sharpen the interpretive center while still leaving room for the generative divergences that are clearly present in the notes and session outputs.`,
+      `Finally, the prose and GCAS sessions read as complementary modes: one scaffolds analytical precision, the other opens narrative or reflective distance that helps integrate learning.`
+    ];
+    return enforceWordCount(sentences.join(" "), 350);
+  }
+
   function generateMarkdown() {
     const d = new Date();
     const dateISO = d.toISOString().slice(0,10);
     const dateStr = d.toLocaleDateString(undefined, { weekday:"long", year:"numeric", month:"long", day:"numeric" });
+
+    const { perCourse, mode, weekId } = computeForestMetrics();
+    const courseList = state.courses || [];
+    const doneToday = state.todayTasks.filter(t => t.done).length;
+    const doneWeekend = state.weekendTasks.filter(t => t.done).length;
+    const totalToday = state.todayTasks.length;
+    const totalWeekend = state.weekendTasks.length;
+    const totalTasks = totalToday + totalWeekend;
+    const doneTotal = doneToday + doneWeekend;
+    const completionRate = totalTasks ? (doneTotal / totalTasks) : 0;
+    const writingText = normalizeText([state.writingSchedule, state.writingThread, state.writingTargets, state.writingNotes].filter(Boolean).join(" "));
+    const proseText = normalizeText([state.proseSchedule, state.proseProject, state.proseTargets, state.proseNotes].filter(Boolean).join(" "));
+
+    const perCourseMax = state.forest.perCourseMax || {};
+    const averages = courseList.length
+      ? courseList.reduce((acc, course) => {
+        const cur = perCourse[course] || {};
+        const max = perCourseMax[course] || {};
+        acc.words += cur.words || 0;
+        acc.syntax += cur.syntax || 0;
+        acc.cohesion += cur.cohesion || 0;
+        acc.maxWords += max.maxWords || 0;
+        acc.maxSyntax += max.maxSyntax || 0;
+        acc.maxCohesion += max.maxCohesion || 0;
+        return acc;
+      }, { words:0, syntax:0, cohesion:0, maxWords:0, maxSyntax:0, maxCohesion:0 })
+      : { words:0, syntax:0, cohesion:0, maxWords:0, maxSyntax:0, maxCohesion:0 };
+
+    const avgWords = courseList.length ? (averages.words / courseList.length) : 0;
+    const avgSyntax = courseList.length ? (averages.syntax / courseList.length) : 0;
+    const avgCohesion = courseList.length ? (averages.cohesion / courseList.length) : 0;
+    const peakSyntax = courseList.length ? (averages.maxSyntax / courseList.length) : 0;
+    const peakCohesion = courseList.length ? (averages.maxCohesion / courseList.length) : 0;
+    const complexityNow = avgSyntax + avgCohesion;
+    const complexityPeak = peakSyntax + peakCohesion;
+    const complexityRatio = complexityPeak ? (complexityNow / complexityPeak) : 0;
+
+    const complexityTrend = complexityRatio > 0.85
+      ? "Complexity is cresting for the week, signaling dense conceptual layering."
+      : complexityRatio > 0.6
+        ? "Complexity is building steadily with consistent connective tissue."
+        : "Complexity is in a reset/absorption phase with simpler conceptual strata.";
+
+    const variance = (() => {
+      if (!courseList.length) return 0;
+      const mean = avgSyntax;
+      const diffs = courseList.map(course => {
+        const val = perCourse[course]?.syntax || 0;
+        return Math.pow(val - mean, 2);
+      });
+      return diffs.reduce((a,b)=>a+b,0) / courseList.length;
+    })();
+    const distribution = variance > 1.2
+      ? "Complexity is spiky across courses (some trees are far more branched)."
+      : "Complexity is fairly even across courses (forest canopy is balanced).";
+
+    const previousExport = state.lastExport;
+    const completionDelta = previousExport
+      ? (completionRate - (previousExport.completionRate || 0))
+      : 0;
+
+    const momentumScore = Math.round(
+      100 * ((completionRate * 0.6) + ((mode.dailyTotal ? (mode.dailyChecked / mode.dailyTotal) : 0) * 0.25) + ((mode.weeklyTotal ? (mode.weeklyChecked / mode.weeklyTotal) : 0) * 0.15))
+    );
 
     const lines = [];
     lines.push(`---`);
@@ -1052,100 +1652,84 @@
 
     lines.push(`# Semester Dashboard — ${dateStr}`);
     lines.push("");
-    lines.push(`**Tags:** #daily #UMO #study #dashboard`);
+    lines.push(`**Tags:** #daily #UMO #study #dashboard #obsidian`);
     lines.push("");
-    lines.push(`**Core window:** ${state.coreWindow || ""}`);
-    lines.push(`**Weekend posture:** ${state.weekendPosture || ""}`);
-    lines.push(`**Weekly rebalance:** ${state.rebalanceDay || ""}`);
-    if (state.intent?.trim()) {
-      lines.push("");
-      lines.push(`> ${state.intent.trim()}`);
-    }
-
-    lines.push("");
-    lines.push("## Modes (today)");
-    Object.keys(state.modeChecks).forEach((k) => {
-      const scope = (state.modeScope?.[k] || "weekly");
-      lines.push(`${mdCheckbox(k, !!state.modeChecks[k])} _( ${scope} )_`);
-    });
-
-    lines.push("");
-    lines.push("## Today");
     lines.push(`**Keystone:** ${obsidianLink(state.keystoneToday || "")}`);
-    if (state.absorption?.trim()) lines.push(`**Absorption block:** ${state.absorption.trim()}`);
-    if (state.workout?.trim()) lines.push(`**Workout:** ${state.workout.trim()}`);
-    if (state.todayNotes?.trim()) {
-      lines.push("");
-      lines.push("### Notes");
-      lines.push(state.todayNotes.trim());
-    }
 
     lines.push("");
-    lines.push("### Today tasks");
-    if (!state.todayTasks.length) lines.push("- (none)");
-    state.todayTasks.forEach((t) => {
-      const meta = [];
-      if (t.course) meta.push(obsidianLink(t.course));
-      if (t.mode && t.mode !== "(mode)") meta.push(t.mode);
-      const tag = meta.length ? ` _( ${meta.join(" • ")} )_` : "";
-      const title = (t.title || "").trim() || "(untitled — fill this in)";
-      lines.push(`- [${t.done ? "x":" "}] ${title}${tag}`);
-    });
+    lines.push("## Print Pack");
+    lines.push("### Efficiency Snapshot");
+    lines.push(`- **Tasks completed:** ${doneTotal}/${totalTasks || 0} (${totalTasks ? percent(completionRate) : "0%"})`);
+    lines.push(`- **Completion delta vs last export:** ${formatDelta(completionDelta)}`);
+    lines.push(`- **Today completion:** ${doneToday}/${totalToday || 0}`);
+    lines.push(`- **Weekend completion:** ${doneWeekend}/${totalWeekend || 0}`);
+    lines.push(`- **Mode adherence:** daily ${mode.dailyChecked}/${mode.dailyTotal} • weekly ${mode.weeklyChecked}/${mode.weeklyTotal}`);
+    lines.push(`- **Momentum score:** ${momentumScore}/100`);
 
     lines.push("");
-    lines.push("## Courses (bounded status)");
-    state.courses.forEach((course) => {
-      const c = state.courseNotes[course] || {};
-      lines.push(`### ${obsidianLink(course)}`);
-      if (c.status) lines.push(`- **Status:** \`${c.status}\``);
-      if (c.focus?.trim()) lines.push(`- **Focus:** ${c.focus.trim()}`);
-      if (c.budget?.trim()) lines.push(`- **Block budget:** ${c.budget.trim()}`);
-      if (c.notes?.trim()) {
-        lines.push("");
-        lines.push("**Notes**");
-        lines.push(c.notes.trim());
-      }
-      lines.push("");
-    });
-
-    lines.push("## Writing");
-    if (state.writingThread?.trim()) lines.push(`- **Thread:** ${state.writingThread.trim()}`);
-    if (state.writingCadence?.trim()) lines.push(`- **Cadence:** ${state.writingCadence.trim()}`);
-    if (state.writingOutput?.trim()) lines.push(`- **Next tiny output:** ${state.writingOutput.trim()}`);
-    if (state.writingTemplate?.trim()) {
-      lines.push("");
-      lines.push("### Session template");
-      lines.push(state.writingTemplate.trim());
-    }
-
     lines.push("");
-    lines.push("### Writing log");
-    if (!state.writingLog.length) {
-      lines.push("- (none)");
+    lines.push("### Forest Snapshot");
+    const forestFile = exportForestPngForMarkdown(dateISO, !!state.forest.hiResPng);
+    if (forestFile) {
+      lines.push(`![[${forestFile}]]`);
     } else {
-      state.writingLog.slice().reverse().forEach((w) => {
-        lines.push(`- **${w.date || ""}** — ${w.minutes || 0} min — ${(w.output || "").trim() || "(no output label)"}`);
-        if (w.notes?.trim()) lines.push(`  - ${w.notes.trim()}`);
-      });
+      lines.push("_Forest image export failed; use Export PNG in the dashboard._");
+      lines.push(`- **Avg words per course:** ${avgWords.toFixed(0)}`);
+      lines.push(`- **Avg syntax score:** ${avgSyntax.toFixed(2)} (peak ${peakSyntax.toFixed(2)})`);
+      lines.push(`- **Avg cohesion score:** ${avgCohesion.toFixed(2)} (peak ${peakCohesion.toFixed(2)})`);
+      lines.push(`- **Complexity vs peak:** ${percent(complexityRatio || 0)}`);
     }
 
     lines.push("");
-    lines.push("## Weekend deliverables");
-    if (state.downtimeRule?.trim()) lines.push(`**Downtime rule:** ${state.downtimeRule.trim()}`);
+    lines.push("### Forest Narrative");
+    lines.push(`${complexityTrend}`);
+    lines.push(`${distribution}`);
+    lines.push(`- **Avg words per course:** ${avgWords.toFixed(0)}`);
+    lines.push(`- **Avg syntax score:** ${avgSyntax.toFixed(2)} (peak ${peakSyntax.toFixed(2)})`);
+    lines.push(`- **Avg cohesion score:** ${avgCohesion.toFixed(2)} (peak ${peakCohesion.toFixed(2)})`);
+    lines.push(`- **Complexity vs peak:** ${percent(complexityRatio || 0)}`);
+
     lines.push("");
-    if (!state.weekendTasks.length) lines.push("- (none)");
-    state.weekendTasks.forEach((t) => {
-      const meta = [];
-      if (t.course) meta.push(obsidianLink(t.course));
-      if (t.mode && t.mode !== "(mode)") meta.push(t.mode);
-      const tag = meta.length ? ` _( ${meta.join(" • ")} )_` : "";
-      const title = (t.title || "").trim() || "(untitled — fill this in)";
-      lines.push(`- [${t.done ? "x":" "}] ${title}${tag}`);
+    lines.push("");
+    lines.push("### Writing & Prose Threads");
+    if (state.writingSchedule?.trim()) lines.push(`- **GCAS schedule:** ${state.writingSchedule.trim()}`);
+    if (state.writingThread?.trim()) lines.push(`- **GCAS thread:** ${state.writingThread.trim()}`);
+    if (state.writingTargets?.trim()) lines.push(`- **GCAS targets:** ${state.writingTargets.trim()}`);
+    if (state.proseSchedule?.trim()) lines.push(`- **Prose schedule:** ${state.proseSchedule.trim()}`);
+    if (state.proseProject?.trim()) lines.push(`- **Prose project:** ${state.proseProject.trim()}`);
+    if (state.proseTargets?.trim()) lines.push(`- **Prose targets:** ${state.proseTargets.trim()}`);
+    if (state.downtimeRule?.trim()) lines.push(`- **Downtime boundary:** ${state.downtimeRule.trim()}`);
+
+    const graphData = computeConceptGraph();
+    const topEdges = graphData.edges
+      .slice()
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 4)
+      .map(edge => `${edge.a} ↔ ${edge.b}`);
+    const corpusKeywords = keyPhrases([collectWritingCorpus(), writingText, proseText].join(" "), 8);
+    const response = buildConferenceResponse({
+      keywords: corpusKeywords,
+      linkages: topEdges,
+      keystone: state.keystoneToday || "",
+      complexityTrend,
+      distribution
     });
+
+    lines.push("");
+    lines.push("### Conference Respondent Response (350 words)");
+    lines.push(response);
 
     lines.push("");
     lines.push("---");
+    lines.push(`**Print footer:** Week ${weekId} • ${dateStr}`);
     lines.push("**Exported from:** Semester Dashboard (local HTML)");
+    state.lastExport = {
+      dateISO,
+      completionRate,
+      doneTotal,
+      totalTasks
+    };
+    saveState();
     return lines.join("\n");
   }
 
@@ -1536,6 +2120,7 @@
     const ink = getCSSVar("--ink") || "#3a3d5e";
     const { ctx, w, h } = initCanvasHiDPI(forestCanvas);
     ctx.clearRect(0,0,w,h);
+    drawRetroBackground(ctx, w, h, state.env);
 
     // Ghost overlay from previous week (faint trace)
     const prevId = prevIsoWeekId(weekId);
@@ -1548,15 +2133,86 @@
         ctx.drawImage(img, 0, 0, w, h);
         ctx.restore();
         drawForestCore(ctx, w, h, ink, perCourse, courses, mat, weekId, mode);
+        applyDither(ctx);
       };
       img.src = ghostUrl;
     } else {
       drawForestCore(ctx, w, h, ink, perCourse, courses, mat, weekId, mode);
+      applyDither(ctx);
     }
 
     const maxInfo = forestMaxInfo(weekId, courses);
     forestLegendEl.innerHTML = forestLegendHTML(weekId, maxInfo);
     forestLegendEl.classList.toggle("show", !!state.forest.legendOn);
+  }
+
+  function applyDither(ctx) {
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    const image = ctx.getImageData(0, 0, w, h);
+    const data = image.data;
+    const matrix = [
+      [0, 8, 2, 10],
+      [12, 4, 14, 6],
+      [3, 11, 1, 9],
+      [15, 7, 13, 5]
+    ];
+    const levels = 4;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        const threshold = (matrix[y % 4][x % 4] / 16 - 0.5) * 42;
+        for (let c = 0; c < 3; c++) {
+          const value = data[idx + c] + threshold;
+          const quant = Math.round((levels - 1) * value / 255) * (255 / (levels - 1));
+          data[idx + c] = clamp(quant, 0, 255);
+        }
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+
+  function drawRetroBackground(ctx, w, h, env) {
+    const temp = env?.temperature ?? 12;
+    const wind = env?.windSpeed ?? 6;
+    const humidity = env?.humidity ?? 65;
+    const clouds = env?.cloudCover ?? 40;
+
+    const hue = clamp(30 + (temp * 2), 15, 220);
+    const gradient = ctx.createLinearGradient(0, 0, w, h);
+    gradient.addColorStop(0, `hsla(${hue}, 40%, 92%, 0.9)`);
+    gradient.addColorStop(1, `hsla(${hue + 30}, 50%, 78%, 0.9)`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, w, h);
+
+    const stripeGap = Math.max(12, 50 - Math.round(humidity / 3));
+    ctx.save();
+    ctx.strokeStyle = `rgba(20,20,30,${0.06 + clouds / 600})`;
+    ctx.lineWidth = 1;
+    for (let y = 0; y < h; y += stripeGap) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const amplitude = 6 + wind * 0.8;
+    const frequency = 0.012 + (humidity / 8000);
+    ctx.save();
+    ctx.strokeStyle = `rgba(40,40,60,${0.12 + wind / 150})`;
+    ctx.lineWidth = 1.2;
+    for (let y = 0; y < h; y += 38) {
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 8) {
+        const wave = Math.sin(x * frequency + y * 0.03) * amplitude;
+        const py = y + wave;
+        if (x === 0) ctx.moveTo(x, py);
+        else ctx.lineTo(x, py);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function forestMaxInfo(weekId, courses){
@@ -1593,23 +2249,17 @@
 
     // Density responds to daily checkbox completion (dynamic)
     const dailyBoost = 0.7 + 0.6 * clamp(mode?.dailyRatio ?? 0, 0, 1);
-    const densityBase = Math.round(160 * dailyBoost);
+    const densityBase = Math.round(220 * dailyBoost);
 
     // Subterrain depth (visible due to higher canvas + raised ground)
-    const depthRange = 120;
+    const depthRange = 140;
     const minLen = 18;
     const maxLen = 105;
-
-    // a subtle soil haze
-    ctx.save();
-    ctx.fillStyle = "rgba(58,61,94,0.035)";
-    ctx.fillRect(0, baseY + 6, w, Math.max(0, h - (baseY + 6)));
-    ctx.restore();
 
     // sample multiple filaments; each chooses a semantic "hot zone" influence
     for (let k = 0; k < densityBase; k++) {
       const x0 = r() * w;
-      const y0 = baseY + 10 + r() * depthRange;
+      const y0 = baseY + 12 + r() * depthRange;
 
       const i = Math.floor(r() * courses.length);
       const j = Math.floor(r() * courses.length);
@@ -1617,9 +2267,9 @@
 
       const thickness = 0.35 + 2.4 * influence;
       const length = minLen + (maxLen - minLen) * (0.35 + 0.95*influence) * r();
-      const alphaBase = 0.018 + 0.07 * influence;
+      const alphaBase = 0.12 + 0.25 * influence;
 
-      const branches = 2 + Math.floor(6 * influence);
+      const branches = 3 + Math.floor(8 * influence);
 
       growFilament(x0, y0, length, -Math.PI/2 + (r()-0.5)*0.9, branches, thickness, alphaBase);
 
@@ -1647,12 +2297,32 @@
         ctx.stroke();
         ctx.restore();
 
+        const nodeR = 0.6 + 1.4 * influence;
+        ctx.save();
+        ctx.fillStyle = ink;
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.beginPath();
+        ctx.arc(nx, ny, nodeR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
         geom.paths.push({
           d: `M ${x} ${y} Q ${cx} ${cy} ${nx} ${ny}`,
           stroke: ink,
           sw: Math.max(0.35, thick * (depth/7)),
           alpha: alpha,
           fill: "none"
+        });
+        geom.paths.push({
+          type: "circle",
+          cx: nx,
+          cy: ny,
+          r: nodeR,
+          stroke: ink,
+          sw: 0.6,
+          alpha: alpha * 0.9,
+          fill: ink,
+          fillAlpha: alpha * 0.9
         });
 
         // branching probabilities
@@ -1674,8 +2344,8 @@
     lastForestGeom = geom;
 
     // baseline + padding so tops never clip; raise ground slightly for subterrain
-    const padL = 18, padR = 18, padT = 18, padB = 56;
-    const groundRaise = 22;                   // raised ground to show mycelium
+    const padL = 70, padR = 70, padT = 18, padB = 110;
+    const groundRaise = 12;                   // raised ground to show mycelium
     const baseY = (h - padB) - groundRaise;
 
     // draw ground line
@@ -1699,7 +2369,7 @@
     const totalMaxRaw = trunkMaxRaw * canopyFactor + canopyPadding;
 
     const maxTargetHeight = (baseY - padT) * 0.74;
-    const scale = Math.min(0.62, maxTargetHeight / Math.max(150, totalMaxRaw));
+    const scale = Math.min(0.55, maxTargetHeight / Math.max(150, totalMaxRaw));
 
     const span = Math.max(1, courses.length - 1);
     const usableW = w - padL - padR;
@@ -1823,10 +2493,14 @@
 
       // Leaves
       const leafCount = Math.min(140, Math.round(leaves * (6 + 10*cohesionN) * (0.92 + 0.18*mode.dailyRatio)));
+      const autumnPalette = ["#7a1f1f", "#9b2c2c", "#b45309", "#d97706", "#f59e0b", "#facc15", "#eab308", "#c2410c"];
+      const richness = clamp((syntax + cohesion) / 6, 0, 1);
+      const paletteCount = Math.max(1, Math.round(1 + richness * (autumnPalette.length - 1)));
+      const palette = autumnPalette.slice(0, paletteCount);
       if (leafCount > 0 && leafPoints.length) {
         ctx.save();
         ctx.strokeStyle = ink;
-        ctx.fillStyle = "rgba(58,61,94,0.10)";
+        ctx.fillStyle = palette[0];
         ctx.globalAlpha = 0.9;
 
         const clusters = Math.max(1, Math.round(4 - 3*cohesionN));
@@ -1842,6 +2516,7 @@
           const py = center.y + (r()-0.5)*spreadPx;
 
           const rad = 1.2 + 1.8*r();
+          ctx.fillStyle = palette[Math.floor(r() * palette.length)];
           ctx.beginPath();
           ctx.arc(px, py, rad, 0, Math.PI*2);
           ctx.fill();
@@ -1859,13 +2534,16 @@
         ctx.restore();
       }
 
-      // Course labels
+      // Course labels (vertical along trunk)
       ctx.save();
       ctx.fillStyle = ink;
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = 0.5;
       ctx.font = "11px " + getCSSVar("--sans");
+      const labelX = clamp(x0, padL, w - padR);
+      ctx.translate(labelX, baseY - 10);
+      ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "center";
-      ctx.fillText(course, x0, h - 16);
+      ctx.fillText(course, 0, 0);
       ctx.restore();
     }
 
@@ -1877,6 +2555,10 @@
   const debouncedForest = debounce(() => {
     try { renderForest(); } catch {}
   }, 180);
+
+  const debouncedGraph = debounce(() => {
+    try { renderConceptGraph(); } catch {}
+  }, 220);
 
   // ---------- Hydration ----------
   function hydrateInputs() {
@@ -1891,10 +2573,15 @@
 
     courseListEl.value = state.courses.join("; ");
 
-    writingTemplateEl.value = state.writingTemplate || "";
-    writingCadenceEl.value = state.writingCadence || "";
+    writingScheduleEl.value = state.writingSchedule || "";
     writingThreadEl.value = state.writingThread || "";
-    writingOutputEl.value = state.writingOutput || "";
+    writingTargetsEl.value = state.writingTargets || "";
+    writingNotesEl.value = state.writingNotes || "";
+
+    proseScheduleEl.value = state.proseSchedule || "";
+    proseProjectEl.value = state.proseProject || "";
+    proseTargetsEl.value = state.proseTargets || "";
+    proseNotesEl.value = state.proseNotes || "";
 
     downtimeRuleEl.value = state.downtimeRule || "";
 
@@ -1902,12 +2589,14 @@
     renderKeystoneDropdown();
     renderCourseCards();
     renderTasks();
-    renderWritingLog();
     renderWeekSummary();
+    renderConceptGraph();
 
     if (state.mdCache) mdPreviewEl.textContent = state.mdCache;
 
     forestLegendEl.classList.toggle("show", !!state.forest.legendOn);
+    toggleHiResPngEl.checked = !!state.forest.hiResPng;
+    document.body.classList.toggle("print-preview", !!state.printPreview);
     debouncedForest();
   }
 
@@ -1939,16 +2628,22 @@
     state.todayNotes = todayNotesEl.value;
     saveState();
     debouncedForest();
+    debouncedGraph();
   });
 
   courseListEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); el("btnApplyCourses").click(); }
   });
 
-  writingTemplateEl.addEventListener("input", () => { state.writingTemplate = writingTemplateEl.value; saveState(); });
-  writingCadenceEl.addEventListener("input", () => { state.writingCadence = writingCadenceEl.value; saveState(); });
-  writingThreadEl.addEventListener("input", () => { state.writingThread = writingThreadEl.value; saveState(); });
-  writingOutputEl.addEventListener("input", () => { state.writingOutput = writingOutputEl.value; saveState(); });
+  writingScheduleEl.addEventListener("input", () => { state.writingSchedule = writingScheduleEl.value; saveState(); debouncedGraph(); });
+  writingThreadEl.addEventListener("input", () => { state.writingThread = writingThreadEl.value; saveState(); debouncedGraph(); });
+  writingTargetsEl.addEventListener("input", () => { state.writingTargets = writingTargetsEl.value; saveState(); debouncedGraph(); });
+  writingNotesEl.addEventListener("input", () => { state.writingNotes = writingNotesEl.value; saveState(); debouncedGraph(); });
+
+  proseScheduleEl.addEventListener("input", () => { state.proseSchedule = proseScheduleEl.value; saveState(); debouncedGraph(); });
+  proseProjectEl.addEventListener("input", () => { state.proseProject = proseProjectEl.value; saveState(); debouncedGraph(); });
+  proseTargetsEl.addEventListener("input", () => { state.proseTargets = proseTargetsEl.value; saveState(); debouncedGraph(); });
+  proseNotesEl.addEventListener("input", () => { state.proseNotes = proseNotesEl.value; saveState(); debouncedGraph(); });
 
   downtimeRuleEl.addEventListener("input", () => { state.downtimeRule = downtimeRuleEl.value; saveState(); });
 
@@ -2034,53 +2729,6 @@
       toast("Applied courses");
     });
 
-    // Writing form
-    el("btnShowWritingForm").addEventListener("click", () => {
-      writingFormEl.classList.toggle("show");
-      if (writingFormEl.classList.contains("show")) writingMinutesEl.focus();
-    });
-
-    el("btnCancelWritingForm").addEventListener("click", () => {
-      writingFormEl.classList.remove("show");
-      writingMinutesEl.value = 45;
-      writingOutputShortEl.value = "";
-      writingNotesShortEl.value = "";
-    });
-
-    el("btnSaveWritingSession").addEventListener("click", () => {
-      const minutes = Number(writingMinutesEl.value || 0);
-      const output = String(writingOutputShortEl.value || "").trim();
-      const notes = String(writingNotesShortEl.value || "").trim();
-      const date = new Date().toLocaleString(undefined, { weekday:"short", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
-
-      state.writingLog.push({
-        id: uid(),
-        minutes: Math.max(0, minutes),
-        output: output || "Writing session",
-        notes,
-        date
-      });
-
-      saveState();
-      writingFormEl.classList.remove("show");
-      writingMinutesEl.value = 45;
-      writingOutputShortEl.value = "";
-      writingNotesShortEl.value = "";
-      renderWritingLog();
-      renderWeekSummary();
-      debouncedForest();
-      toast("Saved writing session");
-    });
-
-    el("btnClearWritingLog").addEventListener("click", () => {
-      state.writingLog = [];
-      saveState();
-      renderWritingLog();
-      renderWeekSummary();
-      debouncedForest();
-      toast("Cleared writing log");
-    });
-
     // Markdown export buttons
     el("btnGenerateMd").addEventListener("click", () => {
       const md = generateMarkdown();
@@ -2105,6 +2753,27 @@
       const dateISO = new Date().toISOString().slice(0,10);
       downloadText(`semester-dashboard_${dateISO}.md`, md, "text/markdown");
       toast("Downloaded .md");
+    });
+
+    el("btnArchiveBundle").addEventListener("click", async () => {
+      try {
+        const md = state.mdCache || generateMarkdown();
+        setMdPreview(md);
+        const dateISO = new Date().toISOString().slice(0,10);
+        const forestName = `forest_${dateISO}${state.forest.hiResPng ? "_hires" : ""}.png`;
+        const forestUrl = forestPngDataUrl(state.forest.hiResPng ? 2 : 1);
+        const mdBytes = textToUint8(md);
+        const pngBytes = dataUrlToUint8(forestUrl);
+        const zip = zipFiles([
+          { name: `semester-dashboard_${dateISO}.md`, data: mdBytes },
+          { name: forestName, data: pngBytes }
+        ]);
+        const blob = new Blob([zip], { type: "application/zip" });
+        downloadBlob(`semester-dashboard_${dateISO}.zip`, blob);
+        toast("Downloaded archive bundle");
+      } catch {
+        toast("Archive bundle failed");
+      }
     });
 
     // Reset day/week checkboxes
@@ -2151,6 +2820,13 @@
       toast("Wiped local data");
     });
 
+    el("btnPrintPreview").addEventListener("click", () => {
+      state.printPreview = !state.printPreview;
+      saveState();
+      document.body.classList.toggle("print-preview", !!state.printPreview);
+      toast(state.printPreview ? "Print preview on" : "Print preview off");
+    });
+
     // Forest controls
     el("btnToggleLegend").addEventListener("click", () => {
       state.forest.legendOn = !state.forest.legendOn;
@@ -2159,11 +2835,17 @@
       toast(state.forest.legendOn ? "Legend on" : "Legend off");
     });
 
+    toggleHiResPngEl.addEventListener("change", () => {
+      state.forest.hiResPng = !!toggleHiResPngEl.checked;
+      saveState();
+      toast(state.forest.hiResPng ? "Hi-res PNG on" : "Hi-res PNG off");
+    });
+
     el("btnExportPNG").addEventListener("click", () => {
       try {
         const dateISO = new Date().toISOString().slice(0,10);
-        const url = forestCanvas.toDataURL("image/png");
-        downloadDataUrl(`forest_${dateISO}.png`, url);
+        const url = forestPngDataUrl(state.forest.hiResPng ? 2 : 1);
+        downloadDataUrl(`forest_${dateISO}${state.forest.hiResPng ? "_hires" : ""}.png`, url);
         toast("Exported PNG");
       } catch {
         toast("PNG export failed");
@@ -2244,10 +2926,37 @@
       debouncedForest();
     }, 120));
 
-    // ---------- Init ----------
-    // Ensure weekId is set early to support ghost logic without flicker
-    if (!state.forest.weekId) state.forest.weekId = isoWeekId(new Date());
-    hydrateInputs();
+  async function fetchMaineEnvironment() {
+    try {
+      const url = "https://api.open-meteo.com/v1/forecast?latitude=43.6591&longitude=-70.2568&current_weather=true&hourly=relativehumidity_2m,cloudcover&timezone=America%2FNew_York";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("weather fetch failed");
+      const data = await res.json();
+      const current = data.current_weather || {};
+      const hourly = data.hourly || {};
+      const timeIndex = hourly.time ? hourly.time.indexOf(current.time) : -1;
+      const humidity = timeIndex >= 0 ? hourly.relativehumidity_2m?.[timeIndex] : null;
+      const cloudCover = timeIndex >= 0 ? hourly.cloudcover?.[timeIndex] : null;
+      state.env = {
+        temperature: current.temperature ?? 12,
+        windSpeed: current.windspeed ?? 6,
+        humidity: humidity ?? 65,
+        cloudCover: cloudCover ?? 40,
+        updated: current.time || new Date().toISOString()
+      };
+      saveState();
+      debouncedForest();
+    } catch {
+      state.env = state.env || { temperature: 12, windSpeed: 6, humidity: 65, cloudCover: 40, updated: new Date().toISOString() };
+      saveState();
+    }
+  }
+
+  // ---------- Init ----------
+  // Ensure weekId is set early to support ghost logic without flicker
+  if (!state.forest.weekId) state.forest.weekId = isoWeekId(new Date());
+  hydrateInputs();
+  fetchMaineEnvironment();
 
     // If first load has no md cache, show empty but ready
     if (!state.mdCache) mdPreviewEl.textContent = "(Generate markdown to preview here.)";
