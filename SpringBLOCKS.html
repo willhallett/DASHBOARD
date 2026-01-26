@@ -346,6 +346,10 @@
       border: 1px solid var(--line);
     }
     .graphHint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+    .apiKeyInput {
+      min-width: 220px;
+    }
   </style>
 </head>
 
@@ -376,6 +380,43 @@
 </header>
 
 <main class="wrap">
+  <!-- Week Summary FULL WIDTH -->
+  <div class="grid" style="margin-top:14px;">
+    <section class="card span2">
+      <div class="section-title">
+        <h2>Week Summary</h2>
+        <div class="hint">Stability readout + forest (no extra data entry)</div>
+      </div>
+
+      <div id="weekSummary" class="mini"></div>
+
+      <div class="forestWrap" aria-label="Weekly forest visualization">
+        <div class="row" style="margin-bottom:10px;">
+          <button class="btn-secondary" id="btnToggleLegend" title="Toggle legend">Legend</button>
+          <button class="btn-secondary" id="btnExportPNG" title="Download forest as JPG">Export JPG</button>
+          <button class="btn-secondary" id="btnExportSVG" title="Download forest as SVG">Export SVG</button>
+          <button class="btn-secondary" id="btnClearGhost" title="Clear last-week ghost overlay">Clear ghost</button>
+          <label class="chip tight" style="padding:6px 10px;">
+            <input type="checkbox" id="toggleFullGhost" />
+            Full ghost
+          </label>
+          <label class="chip tight" style="padding:6px 10px;">
+            <input type="checkbox" id="toggleHiResPng" />
+            Hi-res JPG
+          </label>
+        </div>
+
+        <canvas id="forestCanvas"></canvas>
+
+        <div id="forestLegend" class="forestLegend"></div>
+      </div>
+
+      <div class="footer-note">
+        This is computed from tasks + course statuses + your writing. It grows during the week (max-growth memory for writing/task completion), and overlays last week as a faint trace. Stress and daily-mode checkboxes remain dynamic.
+      </div>
+    </section>
+  </div>
+
   <div class="grid">
     <!-- Left column: core structure -->
     <section class="card">
@@ -455,39 +496,6 @@
       </div>
 
       <div id="todayTasks" style="margin-top:10px;"></div>
-    </section>
-  </div>
-
-  <!-- Week Summary FULL WIDTH -->
-  <div class="grid" style="margin-top:14px;">
-    <section class="card span2">
-      <div class="section-title">
-        <h2>Week Summary</h2>
-        <div class="hint">Stability readout + forest (no extra data entry)</div>
-      </div>
-
-      <div id="weekSummary" class="mini"></div>
-
-      <div class="forestWrap" aria-label="Weekly forest visualization">
-        <div class="row" style="margin-bottom:10px;">
-          <button class="btn-secondary" id="btnToggleLegend" title="Toggle legend">Legend</button>
-          <button class="btn-secondary" id="btnExportPNG" title="Download forest as PNG">Export PNG</button>
-          <button class="btn-secondary" id="btnExportSVG" title="Download forest as SVG">Export SVG</button>
-          <button class="btn-secondary" id="btnClearGhost" title="Clear last-week ghost overlay">Clear ghost</button>
-          <label class="chip tight" style="padding:6px 10px;">
-            <input type="checkbox" id="toggleHiResPng" />
-            Hi-res PNG
-          </label>
-        </div>
-
-        <canvas id="forestCanvas"></canvas>
-
-        <div id="forestLegend" class="forestLegend"></div>
-      </div>
-
-      <div class="footer-note">
-        This is computed from tasks + course statuses + your writing. It grows during the week (max-growth memory for writing/task completion), and overlays last week as a faint trace. Stress and daily-mode checkboxes remain dynamic.
-      </div>
     </section>
   </div>
 
@@ -599,6 +607,7 @@
 
       <div class="row">
         <button id="btnGenerateMd">Generate Markdown</button>
+        <input type="password" id="openaiKey" class="apiKeyInput" placeholder="OpenAI API key" />
         <button class="btn-secondary" id="btnCopyMd">Copy</button>
         <button class="btn-secondary" id="btnDownloadMd">Download .md</button>
         <button class="btn-secondary" id="btnClearMd">Clear Markdown</button>
@@ -641,7 +650,7 @@
 <script>
   // ---------- Version + migration ----------
   const STORAGE_KEY = "semester_dashboard_v1";
-  const CURRENT_VERSION = 8; // bumped for weekly forest tracking
+  const CURRENT_VERSION = 9; // add GPT response + analyses + full ghost
 
   const DEFAULT = {
     version: CURRENT_VERSION,
@@ -700,6 +709,9 @@
     mdCache: "",
     lastExport: null,
     printPreview: false,
+    llmKey: "",
+    llmNoteAnalyses: {},
+    llmConferenceResponse: "",
 
     // Forest
     forest: {
@@ -707,6 +719,7 @@
       weekId: "",
       perCourseMax: {},   // max-memory for writing volume / syntax / cohesion / completed tasks
       hiResPng: false,
+      showFullGhost: false,
       weekly: { weekId: "", courses: {} },
     }
   };
@@ -761,6 +774,14 @@
       s.forest = s.forest || structuredDefault().forest;
       s.forest.weekly = s.forest.weekly || structuredDefault().forest.weekly;
       s.version = 8;
+    }
+    if (v < 9) {
+      s.llmKey = s.llmKey ?? "";
+      s.llmNoteAnalyses = s.llmNoteAnalyses ?? {};
+      s.llmConferenceResponse = s.llmConferenceResponse ?? "";
+      s.forest = s.forest || structuredDefault().forest;
+      s.forest.showFullGhost = s.forest.showFullGhost ?? false;
+      s.version = 9;
     }
     return s;
   }
@@ -845,11 +866,13 @@
   const downtimeRuleEl = el("downtimeRule");
 
   const mdPreviewEl = el("mdPreview");
+  const openaiKeyEl = el("openaiKey");
 
   // Forest elements
   const forestCanvas = el("forestCanvas");
   const forestLegendEl = el("forestLegend");
   const toggleHiResPngEl = el("toggleHiResPng");
+  const toggleFullGhostEl = el("toggleFullGhost");
 
   // ---------- Utilities ----------
   function escapeHtml(s) {
@@ -860,6 +883,32 @@
 
   function getCSSVar(name){
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function hexToRgb(hex) {
+    const h = String(hex || "").replace("#", "");
+    if (h.length === 3) {
+      return {
+        r: parseInt(h[0] + h[0], 16),
+        g: parseInt(h[1] + h[1], 16),
+        b: parseInt(h[2] + h[2], 16)
+      };
+    }
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16)
+    };
+  }
+
+  function mixHex(a, b, t) {
+    const c1 = hexToRgb(a);
+    const c2 = hexToRgb(b);
+    const mix = (v1, v2) => Math.round(v1 + (v2 - v1) * t);
+    const r = mix(c1.r, c2.r).toString(16).padStart(2, "0");
+    const g = mix(c1.g, c2.g).toString(16).padStart(2, "0");
+    const bch = mix(c1.b, c2.b).toString(16).padStart(2, "0");
+    return `#${r}${g}${bch}`;
   }
 
   function debounce(fn, ms){
@@ -1075,7 +1124,7 @@
         const weekly = weeklyScoreForCourse(course, weekId);
         const todayKey = etDateKey();
         const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
-        weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions} • Today: ${(dayScore * 100).toFixed(0)}%`;
+        weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions}/6 • Today: ${(dayScore * 100).toFixed(0)}%`;
         debouncedForest(); // update forest as you write
         debouncedGraph();
       });
@@ -1085,7 +1134,7 @@
       const weekly = weeklyScoreForCourse(course, weekId);
       const todayKey = etDateKey();
       const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
-      weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions} • Today: ${(dayScore * 100).toFixed(0)}%`;
+      weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions}/6 • Today: ${(dayScore * 100).toFixed(0)}%`;
 
       courseCardsEl.appendChild(card);
     });
@@ -1463,52 +1512,69 @@
   function extractAcademicAnchors(text) {
     const anchors = [
       "1900s",
+      "20th century",
       "continental philosophy",
       "structuralist mathematics",
       "theoretical biology",
+      "set theory",
+      "computation theory",
+      "neurophysiology",
+      "neuroecology",
       "systems theory",
       "phenomenology",
       "network epistemology",
       "cybernetics",
       "semiotics",
-      "complex systems"
+      "complex systems",
+      "systems neuroscience",
+      "information theory"
     ];
     const lower = String(text || "").toLowerCase();
     const hits = anchors.filter(a => lower.includes(a));
     return hits.map((t) => `#${slugTag(t)}`);
   }
 
-  function extractKeyConcepts(text, n = 3) {
-    const raw = String(text || "");
-    const normalized = normalizeText(raw);
-    const wordFreq = new Map();
-    contentWords(normalized).forEach(w => wordFreq.set(w, (wordFreq.get(w) || 0) + 1));
-    const phraseFreq = new Map();
-    keyPhrases(raw, 10).forEach(p => phraseFreq.set(p, (phraseFreq.get(p) || 0) + 2));
-    const proper = extractProperNouns(raw, 10);
-    proper.forEach(p => phraseFreq.set(p, (phraseFreq.get(p) || 0) + 3));
+  function tokenizeWords(text) {
+    const norm = normalizeText(text);
+    if (!norm) return [];
+    return norm.split(/\s+/).filter(Boolean).filter(w => !STOP.has(w));
+  }
 
-    const combined = [
-      ...Array.from(phraseFreq.entries()).map(([k, v]) => ({ k, v })),
-      ...Array.from(wordFreq.entries()).map(([k, v]) => ({ k: titleCasePhrase(k), v }))
-    ];
-    const seen = new Set();
-    const ranked = combined
-      .sort((a, b) => b.v - a.v)
-      .filter(({ k }) => {
-        const key = k.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .slice(0, n)
-      .map(({ k }) => k);
-    return ranked;
+  function extractSentences(text) {
+    return splitSentences(text);
+  }
+
+  function sentenceScore(sentence, keywords) {
+    const words = contentWords(sentence);
+    if (!words.length) return 0;
+    const lenScore = clamp(words.length / 20, 0, 1);
+    let keyHits = 0;
+    const lower = sentence.toLowerCase();
+    keywords.forEach((k) => { if (lower.includes(k.toLowerCase())) keyHits += 1; });
+    const keyScore = keywords.length ? clamp(keyHits / keywords.length, 0, 1) : 0;
+    const structureScore = /[;:]/.test(sentence) ? 0.15 : 0;
+    return lenScore + keyScore + structureScore;
+  }
+
+  function extractConceptSentences(text, n = 3) {
+    const sentences = extractSentences(text);
+    if (!sentences.length) return [];
+    const keywords = topNWords(normalizeText(text), 8).map(x => x.w);
+    const scored = sentences.map(s => ({ s, score: sentenceScore(s, keywords) }));
+    return scored.sort((a, b) => b.score - a.score).map(x => x.s).slice(0, n);
+  }
+
+  function titleFromSentence(sentence) {
+    const words = contentWords(sentence).slice(0, 6).map(titleCase);
+    return words.length ? words.join(" ") : "Untitled Note";
   }
 
   function buildNoteAnalysis(noteText) {
-    const concepts = extractKeyConcepts(noteText, 3);
-    const title = concepts.length ? concepts.slice(0, 2).join(" · ") : "Untitled Note";
+    const concepts = extractConceptSentences(noteText, 3).map((s) => {
+      const trimmed = s.trim();
+      return trimmed.length > 160 ? `${trimmed.slice(0, 157)}…` : trimmed;
+    });
+    const title = concepts.length ? titleFromSentence(concepts[0]) : "Untitled Note";
     const anchors = [
       ...new Set([
         ...formatProperNounTags(noteText),
@@ -1561,33 +1627,11 @@
     return `${Math.round(n * 100)}%`;
   }
 
-  function forestPngDataUrl(scale = 1, mime = "image/png", quality = 0.92) {
+  function forestPngDataUrl(scale = 1, mime = "image/jpeg", quality = 0.92) {
     try {
       renderForest();
       const src = forestCanvas;
-      if (scale <= 1) return src.toDataURL(mime, quality);
-      const rect = src.getBoundingClientRect();
-      const w = Math.max(1, Math.floor(rect.width));
-      const h = Math.max(1, Math.floor(rect.height));
-      const tmp = document.createElement("canvas");
-      tmp.width = Math.floor(w * scale);
-      tmp.height = Math.floor(h * scale);
-      const tctx = tmp.getContext("2d");
-      tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
-      return tmp.toDataURL(mime, quality);
-    } catch (err) {
-      console.warn("Forest PNG export failed.", err);
-      return "";
-    }
-  }
-
-  function conceptGraphPngDataUrl(scale = 1, mime = "image/png", quality = 0.92) {
-    try {
-      renderConceptGraph();
-      if (graphState) drawConceptGraphFrame();
-      const src = conceptGraphCanvas;
       if (!src) return "";
-      if (scale <= 1) return src.toDataURL(mime, quality);
       const rect = src.getBoundingClientRect();
       const w = Math.max(1, Math.floor(rect.width));
       const h = Math.max(1, Math.floor(rect.height));
@@ -1595,32 +1639,139 @@
       tmp.width = Math.floor(w * scale);
       tmp.height = Math.floor(h * scale);
       const tctx = tmp.getContext("2d");
+      tctx.fillStyle = "#ffffff";
+      tctx.fillRect(0, 0, tmp.width, tmp.height);
       tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
-      return tmp.toDataURL(mime, quality);
-    } catch (err) {
-      console.warn("Concept graph PNG export failed.", err);
-      return "";
-    }
-  }
-
-  function exportForestPngForMarkdown(dateISO, hiRes) {
-    try {
-      const filename = `forest_${dateISO}${hiRes ? "_hires" : ""}.png`;
-      const url = forestPngDataUrl(hiRes ? 2 : 1);
-      downloadDataUrl(filename, url);
-      return filename;
+      return mime === "image/png" ? tmp.toDataURL(mime) : tmp.toDataURL(mime, quality);
     } catch {
       return "";
     }
   }
 
-  function exportConceptGraphPngForMarkdown(dateISO) {
+  function conceptGraphPngDataUrl(scale = 1, mime = "image/jpeg", quality = 0.92) {
     try {
-      const filename = `concept_graph_${dateISO}.png`;
-      const url = conceptGraphPngDataUrl(1);
-      if (!url) return "";
-      downloadDataUrl(filename, url);
-      return filename;
+      if (!conceptGraphCanvas) return "";
+      renderConceptGraph();
+      if (graphState) drawConceptGraphFrame();
+      const src = conceptGraphCanvas;
+      const rect = src.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      const tmp = document.createElement("canvas");
+      tmp.width = Math.floor(w * scale);
+      tmp.height = Math.floor(h * scale);
+      const tctx = tmp.getContext("2d");
+      tctx.fillStyle = "#ffffff";
+      tctx.fillRect(0, 0, tmp.width, tmp.height);
+      tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
+      return mime === "image/png" ? tmp.toDataURL(mime) : tmp.toDataURL(mime, quality);
+    } catch {
+      return "";
+    }
+  }
+
+  function wrapTextLines(ctx, text, maxWidth) {
+    const words = String(text || "").split(/\s+/);
+    const lines = [];
+    let line = "";
+    words.forEach((word) => {
+      const next = line ? `${line} ${word}` : word;
+      if (ctx.measureText(next).width > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+    });
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function buildLegendGridRows(perCourse, courses, weekId) {
+    return courses.map((course) => {
+      const m = perCourse[course] || {};
+      const notes = state.courseNotes?.[course]?.notes || "";
+      const words = wordCount(notes);
+      const punctCount = (notes.match(/[.,;:!?]/g) || []).length;
+      const sentences = splitSentences(notes);
+      const syntax = words ? Math.min(1, (punctCount / words) * 8) : 0;
+      const cohesionHits = (notes.match(/\b(and|but|because|however|therefore|thus|so)\b/gi) || []).length;
+      const cohesion = sentences.length ? Math.min(1, cohesionHits / Math.max(1, sentences.length)) : 0;
+      const avgSentenceLen = sentences.length ? (words / sentences.length) : 0;
+      const noteWords = contentWords(notes);
+      const uniqueRatio = noteWords.length ? (new Set(noteWords)).size / noteWords.length : 0;
+      const diversityN = clamp(uniqueRatio, 0, 1);
+      const keywordCount = courseKeywords(course).size;
+      const phraseCount = keyPhrases(notes, 8).length;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesion) / 3, 0, 1);
+      const properCount = extractProperNouns(notes, 50).length;
+      const punctuationPerWord = words ? (punctCount / words) : 0;
+      const stress = m.stress || 0;
+      const tasks = m.tasks || 0;
+      const weekly = weeklyScoreForCourse(course, weekId);
+      const status = (state.courseNotes?.[course]?.status || "steady");
+      return {
+        title: `${course} (${status})`,
+        lines: [
+          `Words ${words} • SentLen ${avgSentenceLen.toFixed(1)} • Punct ${(punctuationPerWord * 100).toFixed(1)}%`,
+          `Syntax ${(syntax * 100).toFixed(1)}% • Cohesion ${(cohesion * 100).toFixed(1)}% • Diversity ${(diversityN * 100).toFixed(1)}%`,
+          `Concepts ${keywordCount} • Phrases ${phraseCount} • Proper ${properCount}`,
+          `Tasks ${tasks} • Stress ${(stress * 100).toFixed(1)}% • Linkage ${(conceptN * 100).toFixed(1)}%`,
+          `Weekly ${weekly.sessions}/6 • Score ${(weekly.score * 100).toFixed(1)}%`
+        ]
+      };
+    });
+  }
+
+  function forestCardDataUrl(mime = "image/jpeg", quality = 0.92, scale = 1) {
+    try {
+      renderForest();
+      const src = forestCanvas;
+      if (!src) return "";
+      const rect = src.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      const { perCourse, weekId } = computeForestMetrics();
+      const rows = buildLegendGridRows(perCourse, state.courses || [], weekId);
+      const cols = w > 960 ? 3 : (w > 640 ? 2 : 1);
+      const cellW = Math.floor(w / cols);
+      const lineH = 14;
+      const cellPad = 10;
+      const cellHeight = 6 * lineH + 20;
+      const legendRows = Math.max(1, Math.ceil(rows.length / cols));
+      const legendHeight = legendRows * cellHeight + cellPad;
+      const totalH = h + legendHeight;
+
+      const tmp = document.createElement("canvas");
+      tmp.width = Math.max(1, Math.floor(w * scale));
+      tmp.height = Math.max(1, Math.floor(totalH * scale));
+      const ctx = tmp.getContext("2d");
+      ctx.scale(scale, scale);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, totalH);
+      ctx.drawImage(src, 0, 0, w, h, 0, 0, w, h);
+
+      ctx.fillStyle = "#111111";
+      ctx.font = `12px ${getCSSVar("--sans")}`;
+      const startY = h + cellPad;
+      const maxTextWidth = (cellW - cellPad * 2) * scale;
+      rows.forEach((row, idx) => {
+        const col = idx % cols;
+        const r = Math.floor(idx / cols);
+        const x = col * cellW + cellPad;
+        const y = startY + r * cellHeight;
+        ctx.font = `12px ${getCSSVar("--sans")}`;
+        ctx.fillText(row.title, x, y + 12);
+        ctx.font = `11px ${getCSSVar("--sans")}`;
+        row.lines.forEach((line, i) => {
+          const lines = wrapTextLines(ctx, line, maxTextWidth);
+          lines.forEach((l, li) => {
+            const yy = y + 28 + (i * lineH) + (li * lineH);
+            if (yy < y + cellHeight - 4) ctx.fillText(l, x, yy);
+          });
+        });
+      });
+      return mime === "image/png" ? tmp.toDataURL(mime) : tmp.toDataURL(mime, quality);
     } catch {
       return "";
     }
@@ -1829,24 +1980,111 @@
     return words.join(" ");
   }
 
+  const RESPONDENT_CANON = [
+    "Alain Badiou", "Joan Copjec", "Slavoj Zizek", "Alexander Galloway",
+    "Sarah Pourciau", "Anil Bawa Cavvia", "Leif Weatherby", "Reza Negarestani",
+    "Luciana Parisi", "Gualtieri Piccinini", "Katherine Hayles", "Mary Tiles",
+    "Jose Ferreiros", "Denise Ferreira da Silva", "Fermin Fulda",
+    "Stewart A. Newman", "Michael Heinrich", "Bruce Fink", "Bracha Ettinger"
+  ];
+
+  function bestSentenceFromText(text) {
+    const sentences = extractConceptSentences(text, 1);
+    return sentences[0] || "";
+  }
+
+  function summaryCorpusFromState() {
+    const parts = [];
+    if (state.todayNotes) parts.push(`Today notes: ${state.todayNotes}`);
+    state.courses.forEach((course) => {
+      const c = state.courseNotes?.[course] || {};
+      if (c.focus) parts.push(`${course} focus: ${c.focus}`);
+      if (c.notes) parts.push(`${course} notes: ${c.notes}`);
+    });
+    if (state.writingThread) parts.push(`GCAS thread: ${state.writingThread}`);
+    if (state.writingNotes) parts.push(`GCAS notes: ${state.writingNotes}`);
+    if (state.proseProject) parts.push(`Prose project: ${state.proseProject}`);
+    if (state.proseNotes) parts.push(`Prose notes: ${state.proseNotes}`);
+    return parts.join("\n");
+  }
+
+  async function callOpenAI(messages, temperature = 0.5) {
+    const key = (state.llmKey || "").trim();
+    if (!key) throw new Error("Missing OpenAI API key");
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature,
+        messages
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `OpenAI error ${res.status}`);
+    }
+    const data = await res.json();
+    return (data.choices?.[0]?.message?.content || "").trim();
+  }
+
+  async function generateGptConferenceResponse() {
+    const corpus = summaryCorpusFromState();
+    if (!corpus) return "";
+    const prompt = [
+      "You are a conference respondent writing in the third person.",
+      "Write ~300 words responding to the notes and writing below.",
+      "Assess significance, gaps, and improvements; name intellectual origins and contexts.",
+      "Keep it rigorous and non-affirmational. Avoid first-person voice.",
+      `Audience horizon: ${RESPONDENT_CANON.join(", ")}.`,
+      "Fields: Set Theory, Biological Modeling, Computation Theory, Neurophysiology, Neuroecology.",
+      "Notes:\n" + corpus
+    ].join("\n");
+    return callOpenAI([{ role: "user", content: prompt }], 0.55);
+  }
+
+  async function analyzeNotesWithGpt(course, noteText) {
+    if (!noteText || !noteText.trim()) return null;
+    const prompt = [
+      "Return strict JSON only (no markdown).",
+      "Fields: title (string), key_concepts (array of 3 short sentences), academic_anchors (array of short tags).",
+      "Title should be 3-8 words. Concepts should be short sentences.",
+      `Course: ${course}`,
+      `Notes: ${noteText}`
+    ].join("\n");
+    const raw = await callOpenAI([{ role: "user", content: prompt }], 0.3);
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        title: String(parsed.title || ""),
+        concepts: Array.isArray(parsed.key_concepts) ? parsed.key_concepts.map(String) : [],
+        anchors: Array.isArray(parsed.academic_anchors) ? parsed.academic_anchors.map(String) : []
+      };
+    } catch {
+      return null;
+    }
+  }
+
   function buildConferenceResponse(context) {
     const keywords = context.keywords.length ? context.keywords.join(", ") : "core concepts";
     const linkage = context.linkages.length ? context.linkages.join("; ") : "the dominant nodes cohere around a small set of recurring ideas";
     const keystone = context.keystone || "the keystone course";
     const sentences = [
-      `This archive reads as a coherent semester-long knowledge-building project with ${keystone} functioning as the main organizing axis.`,
+      `The archive reads as a coherent semester-long knowledge-building project with ${keystone} functioning as the main organizing axis.`,
       `Across the corpus, the dominant conceptual signals include ${keywords}, which recur in ways that suggest a stable thematic spine rather than a loose topical drift.`,
       `The linkage structure is consistent with a networked-learning model in which local ideas are continuously reactivated and recombined: ${linkage}.`,
       `From the standpoint of cognitive load theory, the alternation between consolidation and expansion is healthy, and the current pattern indicates productive strain rather than overload.`,
       `The forest narrative of complexity is instructive here: ${context.complexityTrend} ${context.distribution}`,
       `In terms of writing studies and genre theory, the project reads like a movement from exploratory synthesis toward a more situated, audience-aware register.`,
-      `I also hear echoes of conceptual change theory: you are not merely adding facts but reconfiguring explanatory frames as the semester progresses.`,
-      `If we locate the work within systems thinking and activity theory, the most promising thread is the way methods, concepts, and tasks mutually condition one another rather than sitting in isolation.`,
-      `For the next revision, I would recommend an explicit through-line that names the key problem space and repeatedly ties new observations back to it.`,
-      `Doing so will sharpen the interpretive center while still leaving room for the generative divergences that are clearly present in the notes and session outputs.`,
-      `Finally, the prose and GCAS sessions read as complementary modes: one scaffolds analytical precision, the other opens narrative or reflective distance that helps integrate learning.`
+      `Conceptual change is visible: the notes do not merely add facts but repeatedly reconfigure explanatory frames.`,
+      `If the work is situated within systems thinking and activity theory, the most promising thread is the way methods, concepts, and tasks mutually condition one another rather than sitting in isolation.`,
+      `A stronger through-line that names the central problem space and ties new observations back to it would sharpen the interpretive center without constraining generative divergence.`,
+      `The prose and GCAS sessions read as complementary modes: one scaffolds analytical precision, the other opens narrative distance that helps integrate learning.`
     ];
-    return enforceWordCount(sentences.join(" "), 350);
+    return enforceWordCount(sentences.join(" "), 300);
   }
 
   function generateMarkdown(opts = {}) {
@@ -1906,7 +2144,7 @@
 
     const keywords = topNWords(writingText, 6).map(x => titleCase(x.w));
     const linkages = keyPhrases(writingText, 6).map(titleCasePhrase);
-    const confResponse = buildConferenceResponse({
+    const confResponse = state.llmConferenceResponse || buildConferenceResponse({
       keywords,
       linkages,
       keystone: state.keystoneToday || "",
@@ -1914,11 +2152,8 @@
       distribution
     });
 
-    const proseKeywords = topNWords(proseText, 6).map(x => titleCase(x.w));
-    const proseTags = formatProperNounTags(proseText);
-
-    const forestFile = opts.forestFile || `forest_${dateISO}${state.forest.hiResPng ? "_hires" : ""}.png`;
-    const graphFile = opts.graphFile || `concept_graph_${dateISO}.png`;
+    const forestFilename = opts.forestFilename || "forest.jpg";
+    const graphFilename = opts.graphFilename || "concept_graph.jpg";
 
     const header = [
       `# Semester Dashboard — ${dateStr}`,
@@ -1938,9 +2173,16 @@
       if (c.focus) t.push(`  - Focus: ${c.focus}`);
       if (c.budget) t.push(`  - Block budget: ${c.budget}`);
       const noteText = c.notes || "";
-      const analysis = buildNoteAnalysis(noteText);
+      const gptAnalysis = noteText.trim() ? (state.llmNoteAnalyses?.[course] || null) : null;
+      const analysis = gptAnalysis && (gptAnalysis.title || gptAnalysis.concepts)
+        ? {
+          title: gptAnalysis.title || "Untitled Note",
+          concepts: Array.isArray(gptAnalysis.concepts) ? gptAnalysis.concepts : [],
+          anchors: Array.isArray(gptAnalysis.anchors) ? gptAnalysis.anchors : []
+        }
+        : buildNoteAnalysis(noteText);
       const noteBullets = analysis.concepts.map(p => `    - ${p || "—"}`).join("\n");
-      const noteAnchors = analysis.anchors;
+      const noteAnchors = (analysis.anchors || []).map((a) => a.startsWith("#") ? a : `#${slugTag(a)}`);
       t.push(`  - Note title: ${analysis.title}`);
       t.push(`  - Key concepts:`);
       t.push(noteBullets || "    - —");
@@ -1976,16 +2218,8 @@
       `- Notes: ${state.proseNotes || "—"}`
     ].join("\n");
 
-    const summary = [
-      `## Week Summary`,
-      `- Open tasks: ${state.todayTasks.filter(t => !t.done).length + state.weekendTasks.filter(t => !t.done).length}`,
-      `- Completed tasks: ${state.todayTasks.filter(t => t.done).length + state.weekendTasks.filter(t => t.done).length}`,
-      `- Keystone: ${state.keystoneToday || "—"}`,
-      `- Modes checked: daily ${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="daily" && state.modeChecks[k]).length}/${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="daily").length || 1} • weekly ${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="weekly" && state.modeChecks[k]).length}/${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="weekly").length || 1}`
-    ].join("\n");
-
-    const forestEmbed = forestFile || "";
-    const graphEmbed = graphFile || "";
+    const forestFile = forestFilename;
+    const graphFile = graphFilename;
 
     const out = [
       header,
@@ -1995,8 +2229,6 @@
       ``,
       `## Courses`,
       courseNotes,
-      ``,
-      summary,
       ``,
       taskList("Today Tasks", state.todayTasks),
       ``,
@@ -2009,20 +2241,14 @@
       `## Conference Response (auto-generated)`,
       confResponse,
       ``,
-      `## Prose Tags`,
-      proseTags.join(" "),
-      ``,
-      `## Notes`,
-      state.todayNotes || "—",
-      ``,
       `## Forest Snapshot`,
       `- Week: ${weekId}`,
       `- Avg words: ${avgWords.toFixed(1)} (max ${avgMaxWords.toFixed(1)})`,
       `- Avg syntax: ${avgSyntax.toFixed(2)} (max ${avgMaxSyntax.toFixed(2)})`,
       `- Avg cohesion: ${avgCohesion.toFixed(2)} (max ${avgMaxCohesion.toFixed(2)})`,
       `- Completion rate: ${percent(completionRate)}`,
-      `- Forest PNG: ${forestEmbed ? `![[${forestEmbed}]]` : "N/A"}`,
-      `- Concept Graph PNG: ${graphEmbed ? `![[${graphEmbed}]]` : "N/A"}`
+      `- Forest image: ${forestFile ? `![[${forestFile}]]` : "N/A"}`,
+      `- Concept graph image: ${graphFile ? `![[${graphFile}]]` : "N/A"}`
     ].join("\n");
 
     return out;
@@ -2193,24 +2419,8 @@
     return (h % 100000) / 100000;
   }
 
-  function courseCorpus(course) {
-    const c = state.courseNotes?.[course] || {};
-    const taskText = [
-      ...state.todayTasks.filter(t => t.course === course).map(t => t.title || ""),
-      ...state.weekendTasks.filter(t => t.course === course).map(t => t.title || "")
-    ].join(" ");
-    return [
-      course,
-      c.status || "",
-      c.focus || "",
-      c.budget || "",
-      c.notes || "",
-      taskText
-    ].join(" ");
-  }
-
   function courseKeywords(course) {
-    const raw = courseCorpus(course);
+    const raw = state.courseNotes?.[course]?.notes || "";
     const norm = normalizeText(raw);
     const words = topNWords(norm, 8).map(x => x.w);
     const phrases = keyPhrases(raw, 6).map(p => p.replace(/[^a-z0-9\s]/gi, "").trim()).filter(Boolean);
@@ -2318,8 +2528,6 @@
         nutrients.push({ x: nx + jx, y: Math.min(h - 6, Math.max(baseY + 8, ny + jy)) });
       }
     });
-    const maxNutrients = 1400;
-    if (nutrients.length > maxNutrients) nutrients.length = maxNutrients;
     if (!nutrients.length) {
       graph.nodes.forEach((node) => {
         const count = 10;
@@ -2360,8 +2568,7 @@
     const influence = 140 + 70 * weeklyAvg;
     const kill = 1;
     const step = 8;
-    const iterations = Math.min(160, Math.round(240 + 120 * weeklyAvg));
-    const maxTips = 1800;
+    const iterations = Math.round(240 + 120 * weeklyAvg);
 
     // Contact with trunks
     graph.nodes.forEach((node) => {
@@ -2428,19 +2635,14 @@
         ctx.stroke();
         newTips.push({ x: nx, y: ny, dirX: dx / d, dirY: dy / d });
       }
-      for (let i = 0; i < newTips.length; i++) {
-        tips.push(newTips[i]);
-        if (tips.length >= maxTips) break;
-      }
-      if (tips.length >= maxTips) break;
+      tips.push(...newTips);
     }
 
     // Fuse nearby tips to create web-like connections
-    const fuseStride = tips.length > 1200 ? 2 : 1;
-    for (let i = 0; i < tips.length; i += fuseStride) {
+    for (let i = 0; i < tips.length; i++) {
         const weeklyI = graph.weeklyByCourse?.[tips[i].course] || 0;
         const linkMax = 46 + 28 * weeklyI + 24 * weeklyAvg;
-      for (let j = i + 1; j < tips.length; j += fuseStride) {
+      for (let j = i + 1; j < tips.length; j++) {
         const weeklyJ = graph.weeklyByCourse?.[tips[j].course] || 0;
         const conceptI = graph.conceptByCourse?.[tips[i].course] || 0;
         const conceptJ = graph.conceptByCourse?.[tips[j].course] || 0;
@@ -2513,13 +2715,13 @@
       const weekly = weeklyScoreForCourse(course, weekId);
       const status = (state.courseNotes?.[course]?.status || "steady");
       return `
-        <div style="display:grid;gap:4px;padding:8px;border:1px solid #e6e6e6;border-radius:10px;background:#ffffff;">
+        <div style="display:grid;gap:4px;padding:8px;border:1px dashed rgba(58,61,94,.2);border-radius:10px;background:rgba(255,255,255,0.35);">
           <div><b>${escapeHtml(course)}</b> <span class="pill">${status}</span></div>
           <div>Words ${words} • SentLen ${avgSentenceLen.toFixed(1)} • Punct ${(punctuationPerWord * 100).toFixed(1)}%</div>
           <div>Syntax ${(syntax * 100).toFixed(1)}% • Cohesion ${(cohesion * 100).toFixed(1)}% • Diversity ${(diversityN * 100).toFixed(1)}%</div>
           <div>Concepts ${keywordCount} • Phrases ${phraseCount} • Proper ${properCount}</div>
           <div>Tasks ${tasks} • Stress ${(stress * 100).toFixed(1)}% • Linkage ${(conceptN * 100).toFixed(1)}%</div>
-          <div>Weekly sessions ${weekly.sessions} • Days ${weekly.sessions}/6 • Weekly score ${(weekly.score * 100).toFixed(1)}%</div>
+          <div>Weekly sessions ${weekly.sessions}/6 • Weekly score ${(weekly.score * 100).toFixed(1)}%</div>
         </div>
       `;
     }).join("");
@@ -2556,20 +2758,10 @@
     lastForestGeom = { width: w, height: h, trees: [] };
 
     // ghost overlay
-    drawGhostForest(ctx, w, h, padL, padR, baseY);
-
-    const simulateWeekly = true;
-    const simulateWeeklyScore = 1.0;
-    const weekendStats = {};
-    const courseMap = new Map(state.courses.map(c => [String(c).trim().toLowerCase(), c]));
-    state.weekendTasks.forEach((t) => {
-      const raw = String(t.course || "Unassigned");
-      const key = raw.trim().toLowerCase();
-      const c = courseMap.get(key) || raw.trim() || "Unassigned";
-      if (!weekendStats[c]) weekendStats[c] = { total: 0, done: 0 };
-      weekendStats[c].total += 1;
-      if (t.done) weekendStats[c].done += 1;
-    });
+    const fullGhost = state.forest.showFullGhost
+      ? buildFullGhost(w, h, padL, padR, padT, baseY, perCourse, mode, weekId)
+      : null;
+    drawGhostForest(ctx, w, h, padL, padR, baseY, fullGhost);
 
     courses.forEach((course, idx) => {
       const x0 = spacing * (idx + 1);
@@ -2596,7 +2788,7 @@
       const phraseCount = keyPhrases(noteText, 8).length;
       const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
       const weekly = weeklyScoreForCourse(course, weekId);
-      const weeklyScoreN = simulateWeekly ? simulateWeeklyScore : weekly.score;
+      const weeklyScoreN = weekly.score;
       const isGcas = /gcas/i.test(course);
       const heightScale = isGcas ? 1 : 0.7;
       const canopyBoost = isGcas ? 1 : 1.2;
@@ -2653,10 +2845,6 @@
       }, lastForestGeom);
     });
 
-    // mycelium network (rendered on top for visibility)
-    const mycelium = computeMyceliumGraph(courses, perCourse, baseY, w, h, weekId, simulateWeeklyScore);
-    drawMycelium(ctx, mycelium, baseY, w, h);
-
     applyOrderedDither(ctx, w, h);
 
     // save snapshot for this week so it becomes next week's ghost
@@ -2703,15 +2891,94 @@
     }
   }
 
-  function drawGhostForest(ctx, w, h, padL, padR, baseY) {
-    if (isMondayAfterNoonET()) return;
+  function buildFullGhost(w, h, padL, padR, padT, baseY, perCourse, mode, weekId) {
+    const courses = state.courses || [];
+    const count = Math.max(1, courses.length);
+    const spacing = w / (count + 1);
+    const currentMax = {
+      words: Math.max(1, ...Object.values(perCourse).map(m => m.words || 0)),
+      syntax: Math.max(0.1, ...Object.values(perCourse).map(m => m.syntax || 0)),
+      cohesion: Math.max(0.1, ...Object.values(perCourse).map(m => m.cohesion || 0)),
+      tasks: Math.max(1, ...Object.values(perCourse).map(m => m.tasks || 0))
+    };
+    const dummyCanvas = document.createElement("canvas");
+    dummyCanvas.width = w;
+    dummyCanvas.height = h;
+    const ctx = dummyCanvas.getContext("2d");
+    const ghostGeom = { width: w, height: h, trees: [] };
+    courses.forEach((course, idx) => {
+      const x0 = spacing * (idx + 1);
+      const metrics = perCourse[course] || { words: 0, syntax: 0, cohesion: 0, tasks: 0, stress: 0 };
+      const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
+      const syntaxN = clamp((metrics.syntax || 0) / currentMax.syntax, 0, 1);
+      const cohesionN = clamp((metrics.cohesion || 0) / currentMax.cohesion, 0, 1);
+      const tasksN = clamp((metrics.tasks || 0) / currentMax.tasks, 0, 1);
+      const stress = clamp(metrics.stress || 0, 0, 1);
+      const noteText = state.courseNotes?.[course]?.notes || "";
+      const noteWords = contentWords(noteText);
+      const uniqueRatio = noteWords.length ? (new Set(noteWords)).size / noteWords.length : 0;
+      const diversityN = clamp(uniqueRatio, 0, 1);
+      const keywordCount = courseKeywords(course).size;
+      const phraseCount = keyPhrases(noteText, 8).length;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+      const weeklyScoreN = 1;
+      const taskScoreN = 1;
+      const isGcas = /gcas/i.test(course);
+      const heightScale = isGcas ? 1 : 0.7;
+      const canopyBoost = isGcas ? 1 : 1.2;
+      const maxHeight = Math.max(40, baseY - padT - 70);
+      const height = Math.min(
+        maxHeight * 0.6 * heightScale,
+        (12 + 40 * weeklyScoreN + 16 * (wordsN * weeklyScoreN) + 10 * (tasksN * weeklyScoreN)) * heightScale
+      );
+      const complexityN = clamp((wordsN + syntaxN + cohesionN + tasksN + weeklyScoreN) / 5, 0, 1);
+      const branchiness = clamp(0.3 + 0.7 * syntaxN * weeklyScoreN + 0.25 * tasksN * weeklyScoreN, 0.2, 1.6);
+      const leaves = clamp(0.4 + 1.6 * taskScoreN * canopyBoost + 0.9 * cohesionN * weeklyScoreN + 0.4 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2);
+      const crownSpread = clamp(1.0 + 1.6 * taskScoreN * canopyBoost + 0.6 * syntaxN, 1.0, 4.0);
+      const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
+      drawTree(ctx, {
+        x0,
+        baseY,
+        height,
+        trunkW: 0.5,
+        branchiness,
+        leaves,
+        crownSpread,
+        stress,
+        padT,
+        padL,
+        padR,
+        w,
+        dayLight,
+        cohesionN,
+        syntaxN,
+        tasksN,
+        diversityN,
+        wordsN,
+        conceptN,
+        weeklyScoreN,
+        weekendScoreN: taskScoreN,
+        noteText,
+        syntax: metrics.syntax || 0,
+        cohesion: metrics.cohesion || 0,
+        complexityN,
+        seedKey: `${weekId}|${course}|full`,
+        course,
+        mode
+      }, ghostGeom);
+    });
+    return ghostGeom;
+  }
+
+  function drawGhostForest(ctx, w, h, padL, padR, baseY, overrideGhost = null) {
+    if (!overrideGhost && isMondayAfterNoonET()) return;
     const current = isoWeekId(new Date());
     const prev = prevIsoWeekId(current);
-    const ghost = loadGhostSnapshot(prev);
+    const ghost = overrideGhost || loadGhostSnapshot(prev);
     if (!ghost) return;
 
     ctx.save();
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.12;
     ctx.strokeStyle = "#000000";
     ctx.lineWidth = 0.5;
 
@@ -2771,25 +3038,26 @@
     const syntaxN = features.syntaxN || 0;
     const cohesionN = features.cohesionN || 0;
     const tasksN = features.tasksN || 0;
+    const stressN = features.stressN || 0;
     const diversityN = features.diversityN || 0;
     const wordsN = features.wordsN || 0;
     const conceptN = features.conceptN || 0;
 
-    const sigHash = hashString(String(signature || ""));
+    const baseHash = hashString(String(signature || ""));
     const isGcas = /gcas/i.test(signature || "");
-    const sigJitter = ((sigHash % 23) - 11) * 0.7 + (isGcas ? -1.2 : 0);
+    const sigJitter = ((baseHash % 23) - 11) * 0.7 + (isGcas ? -1.2 : 0);
     const angleDeg = clamp(
-      24 + 28 * (1 - cohesionN) + 12 * diversityN + sigJitter,
-      20,
-      60
+      26 + 30 * (1 - cohesionN) + 12 * diversityN + 14 * stressN + sigJitter,
+      18,
+      70
     );
-    const iterations = 18;
+    const iterations = Math.max(2, Math.round(18 - stressN * 16));
     let step = clamp(8 + height * (0.05 + 0.03 * cohesionN), 6, 16);
-    step += 10;
-    const stepScale = 0.85 + ((sigHash % 31) / 100) + (isGcas ? 0.06 : 0); // deterministic per-course variation
+    step += 8 + 4 * tasksN;
+    const stepScale = 0.85 + ((baseHash % 31) / 100) + (isGcas ? 0.06 : 0); // deterministic per-course variation
     step *= stepScale;
     if (maxRise) {
-      const stepCap = Math.max(3, maxRise / (iterations * 2.8));
+      const stepCap = Math.max(3, maxRise / (iterations * 2.6));
       step = Math.min(step, stepCap);
     }
 
@@ -2813,7 +3081,7 @@
       Math.round(diversityN * 10),
       Math.round(tasksN * 10),
       Math.round(wordsN * 10),
-      sigHash
+      baseHash
     ].join("|");
     const rules = grammarSet[hashString(key) % grammarSet.length];
 
@@ -2823,7 +3091,7 @@
       iterations,
       angle: angleDeg * (Math.PI / 180),
       step,
-      sigHash
+      sigHash: baseHash
     };
   }
 
@@ -2910,21 +3178,13 @@
     } = opts;
 
     const ink = "#000000";
-    const curvature = clamp(0.3 + 0.6 * (1 - stress), 0.2, 0.9);
-
-
     const geom = {
       course,
       paths: []
     };
     forestGeom.trees.push(geom);
 
-    const mature = leaves > 0.85 || (complexityN || 0) > 0.6;
-    const hue = stress > 0.7 ? 350 : 215;
-    const tint = stress > 0.7 ? 0.8 : 0.55;
-    // No per-tree background fill to keep mycelium visible underneath
-
-    const shadow = mature ? 1.15 : 0.7;
+    // No per-tree background fill to keep forest minimal
 
       // Draw trunk
       ctx.save();
@@ -2943,35 +3203,39 @@
         diversityN,
         wordsN
       }, height, maxRise, `${course}|${noteText}|${tasksN}|${conceptN}`);
-      const growthN = clamp(weeklyScoreN, 0, 1);
+      const growthN = Math.max(0.06, clamp(weeklyScoreN, 0, 1));
       const runScale = 0.1 + 0.9 * growthN;
       const fitScale = clamp((baseY - padT - 20) / Math.max(1, height * 1.6), 0.4, 1);
-      lsys.step *= runScale * fitScale;
+      const stepJitter = 0.9 + (seededRandom(seedKey, "step") - 0.5) * 0.18;
+      lsys.step *= runScale * fitScale * stepJitter;
       const heightScale = clamp(1 - (lsys.iterations - 2) * 0.12, 0.55, 1);
       const trunkLen = height * dayLight * heightScale;
       const angleBias = 0.28 + 0.45 * (1 - weeklyScoreN);
       const angleSign = (tasksN - 0.5) >= 0 ? 1 : -1;
-      const trunkAngle = -Math.PI / 2 + angleSign * angleBias;
+      const angleJitter = (seededRandom(seedKey, "angle") - 0.5) * 0.4;
+      const trunkAngle = -Math.PI / 2 + angleSign * angleBias + angleJitter;
+      const trunkJitter = (seededRandom(seedKey, "trunk") - 0.5) * 12;
+      const trunkBaseX = clamp(x0 + trunkJitter, padL + 4, w - padR - 4);
       const trunkTop = {
-        x: x0 + Math.cos(trunkAngle) * trunkLen,
+        x: trunkBaseX + Math.cos(trunkAngle) * trunkLen,
         y: baseY + Math.sin(trunkAngle) * trunkLen
       };
       trunkTop.y = Math.max(trunkTop.y, padT + 8);
 
       ctx.beginPath();
-      ctx.moveTo(x0, baseY);
+      ctx.moveTo(trunkBaseX, baseY);
       ctx.lineTo(trunkTop.x, trunkTop.y);
       ctx.stroke();
       ctx.restore();
 
       geom.paths.push({
-        d: `M ${x0} ${baseY} L ${trunkTop.x} ${trunkTop.y}`,
+        d: `M ${trunkBaseX} ${baseY} L ${trunkTop.x} ${trunkTop.y}`,
         stroke: ink,
         sw: trunkW,
         alpha: (0.33 + 0.22*stress),
         fill: "none"
       });
-      const lean = clamp((tasksN - 0.5) * 0.12 + (stress - 0.5) * 0.08 + (syntaxN - 0.5) * 0.05, -0.18, 0.18);
+      const lean = clamp((tasksN - 0.5) * 0.12 + (stress - 0.5) * 0.08 + (syntaxN - 0.5) * 0.05 + angleJitter * 0.35, -0.25, 0.25);
       if (growthN > 0.05) {
         drawLSystem(ctx, trunkTop, -Math.PI / 2 + lean, lsys, leafPoints, ink, geom, padT + 8, runScale * fitScale);
       }
@@ -2989,7 +3253,8 @@
       ];
       const richness = clamp((syntax + cohesion) / 6 + (complexityN || 0) * 0.35, 0, 1);
       const paletteCount = Math.max(3, Math.round(3 + richness * (autumnPalette.length - 5)));
-      const palette = autumnPalette.slice(0, paletteCount);
+      const stressMix = clamp(stress, 0, 1) * 0.5;
+      const palette = autumnPalette.slice(0, paletteCount).map((c) => mixHex(c, "#2a2a2a", stressMix));
       if (leafCount > 0 && leafPoints.length) {
         ctx.save();
         ctx.strokeStyle = ink;
@@ -2998,8 +3263,8 @@
 
         const points = (leafPoints.length ? leafPoints : [
           { x: trunkTop.x, y: trunkTop.y },
-          { x: x0, y: baseY - (height * 0.3) },
-          { x: x0, y: baseY - (height * 0.6) }
+          { x: trunkBaseX, y: baseY - (height * 0.3) },
+          { x: trunkBaseX, y: baseY - (height * 0.6) }
         ]).slice().sort((a, b) => a.y - b.y);
         const topCount = Math.max(6, Math.round(points.length * 0.65));
         const upperPoints = points.slice(0, topCount);
@@ -3049,16 +3314,15 @@
         ctx.restore();
       }
 
-      // Course labels (vertical along trunk)
+      // Course labels (horizontal below sprout)
       ctx.save();
       ctx.fillStyle = ink;
       ctx.globalAlpha = 1;
-      ctx.font = "11px " + getCSSVar("--sans");
-      const labelX = clamp(x0 - 12, padL, w - padR);
-      ctx.translate(labelX, baseY - 10);
-      ctx.rotate(-Math.PI / 2);
+      ctx.font = "600 12px " + getCSSVar("--sans");
+      const labelX = clamp(x0, padL + 4, w - padR - 4);
+      const labelY = Math.min(baseY + 16, baseY + 26);
       ctx.textAlign = "center";
-      ctx.fillText(course, 0, 0);
+      ctx.fillText(course, labelX, labelY);
       ctx.restore();
     }
 
@@ -3102,6 +3366,7 @@
     proseNotesEl.value = state.proseNotes || "";
     if (graphSpacingEl) graphSpacingEl.value = String(graphSpacing);
 
+    if (openaiKeyEl) openaiKeyEl.value = state.llmKey || "";
     downtimeRuleEl.value = state.downtimeRule || "";
 
     renderModeChips();
@@ -3115,6 +3380,7 @@
 
     forestLegendEl.classList.toggle("show", !!state.forest.legendOn);
     toggleHiResPngEl.checked = !!state.forest.hiResPng;
+    if (toggleFullGhostEl) toggleFullGhostEl.checked = !!state.forest.showFullGhost;
     document.body.classList.toggle("print-preview", !!state.printPreview);
     debouncedForest();
   }
@@ -3165,6 +3431,13 @@
   proseNotesEl.addEventListener("input", () => { state.proseNotes = proseNotesEl.value; saveState(); debouncedGraph(); });
 
   downtimeRuleEl.addEventListener("input", () => { state.downtimeRule = downtimeRuleEl.value; saveState(); });
+
+  if (openaiKeyEl) {
+    openaiKeyEl.addEventListener("input", () => {
+      state.llmKey = openaiKeyEl.value;
+      saveState();
+    });
+  }
 
   // Mode editor
   el("btnAddMode").addEventListener("click", () => {
@@ -3264,14 +3537,38 @@
     });
 
     // Markdown export buttons
-    el("btnGenerateMd").addEventListener("click", () => {
-      const md = generateMarkdown();
+    el("btnGenerateMd").addEventListener("click", async () => {
+      if (openaiKeyEl && openaiKeyEl.value.trim()) {
+        state.llmKey = openaiKeyEl.value.trim();
+        saveState();
+      }
+      let usedGpt = false;
+      if (state.llmKey) {
+        try {
+          const analyses = { ...(state.llmNoteAnalyses || {}) };
+          for (const course of state.courses || []) {
+            const noteText = state.courseNotes?.[course]?.notes || "";
+            if (!noteText.trim()) continue;
+            const res = await analyzeNotesWithGpt(course, noteText);
+            if (res) analyses[course] = res;
+          }
+          state.llmNoteAnalyses = analyses;
+          const response = await generateGptConferenceResponse();
+          if (response) state.llmConferenceResponse = response;
+          saveState();
+          usedGpt = true;
+        } catch (err) {
+          console.warn("GPT markdown helpers failed", err);
+          toast("GPT failed (fallback used)");
+        }
+      }
+      const md = generateMarkdown({ forestFilename: "forest.jpg", graphFilename: "concept_graph.jpg" });
       setMdPreview(md);
-      toast("Generated markdown");
+      toast(usedGpt ? "Generated markdown (GPT)" : "Generated markdown");
     });
 
     el("btnCopyMd").addEventListener("click", async () => {
-      const md = state.mdCache || generateMarkdown();
+      const md = state.mdCache || generateMarkdown({ forestFilename: "forest.jpg", graphFilename: "concept_graph.jpg" });
       setMdPreview(md);
       try {
         await navigator.clipboard.writeText(md);
@@ -3282,7 +3579,7 @@
     });
 
     el("btnDownloadMd").addEventListener("click", () => {
-      const md = state.mdCache || generateMarkdown();
+      const md = state.mdCache || generateMarkdown({ forestFilename: "forest.jpg", graphFilename: "concept_graph.jpg" });
       setMdPreview(md);
       downloadText("download.md", md, "text/markdown");
       toast("Downloaded .md");
@@ -3297,29 +3594,30 @@
 
     el("btnArchiveBundle").addEventListener("click", async () => {
       try {
-        const forestName = "forest.jpg";
-        const graphName = "concept_graph.jpg";
-        const forestUrl = forestPngDataUrl(state.forest.hiResPng ? 2 : 1, "image/jpeg", 0.92);
-        const graphUrl = conceptGraphPngDataUrl(1, "image/jpeg", 0.92);
-        const md = generateMarkdown({
-          forestFile: forestUrl ? forestName : "",
-          graphFile: graphUrl ? graphName : ""
-        });
+        const md = state.mdCache || generateMarkdown({ forestFilename: "forest.jpg", graphFilename: "concept_graph.jpg" });
         setMdPreview(md);
+        const d = new Date();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        const folder = `Dashboard_${mm}/${dd}/${yyyy}`;
+        const forestName = `${folder}/forest.jpg`;
+        const graphName = `${folder}/concept_graph.jpg`;
+        const mdName = `${folder}/download.md`;
+        const forestUrl = forestCardDataUrl("image/jpeg", 0.92, state.forest.hiResPng ? 2 : 1);
+        const graphUrl = conceptGraphPngDataUrl(1, "image/jpeg", 0.92);
         const mdBytes = textToUint8(md);
-        const files = [{ name: "download.md", data: mdBytes }];
-        if (forestUrl) files.push({ name: forestName, data: dataUrlToUint8(forestUrl) });
-        if (graphUrl) files.push({ name: graphName, data: dataUrlToUint8(graphUrl) });
-        const zip = zipFiles(files);
+        const forestBytes = forestUrl ? dataUrlToUint8(forestUrl) : new Uint8Array();
+        const graphBytes = graphUrl ? dataUrlToUint8(graphUrl) : new Uint8Array();
+        const zip = zipFiles([
+          { name: mdName, data: mdBytes },
+          ...(forestUrl ? [{ name: forestName, data: forestBytes }] : []),
+          ...(graphUrl ? [{ name: graphName, data: graphBytes }] : [])
+        ]);
         const blob = new Blob([zip], { type: "application/zip" });
         downloadBlob("download.zip", blob);
-        const missing = [
-          !forestUrl ? "forest" : "",
-          !graphUrl ? "graph" : ""
-        ].filter(Boolean);
-        toast(missing.length ? `Downloaded bundle (missing ${missing.join(", ")})` : "Downloaded archive bundle");
-      } catch (err) {
-        console.warn("Archive bundle failed.", err);
+        toast("Downloaded archive bundle");
+      } catch {
         toast("Archive bundle failed");
       }
     });
@@ -3337,9 +3635,10 @@
     });
 
     el("btnResetWeek").addEventListener("click", () => {
-      for (const k of Object.keys(state.modeChecks)) {
-        state.modeChecks[k] = false;
-      }
+      if (!lastForestGeom) renderForest();
+      saveGhostSnapshot(state.forest.weekId || isoWeekId(new Date()));
+      state.modeChecks = { ...structuredDefault().modeChecks };
+      state.modeScope = { ...structuredDefault().modeScope };
       state.todayTasks = [];
       state.weekendTasks = [];
       state.todayNotes = "";
@@ -3351,7 +3650,10 @@
       state.proseTargets = "";
       Object.keys(state.courseNotes || {}).forEach((course) => {
         state.courseNotes[course].notes = "";
+        state.courseNotes[course].status = "steady";
       });
+      state.llmNoteAnalyses = {};
+      state.llmConferenceResponse = "";
       state.forest.perCourseMax = {};
       state.forest.weekId = isoWeekId(new Date());
       state.forest.weekly = { weekId: state.forest.weekId, courses: {} };
@@ -3404,17 +3706,26 @@
     toggleHiResPngEl.addEventListener("change", () => {
       state.forest.hiResPng = !!toggleHiResPngEl.checked;
       saveState();
-      toast(state.forest.hiResPng ? "Hi-res PNG on" : "Hi-res PNG off");
+      toast(state.forest.hiResPng ? "Hi-res JPG on" : "Hi-res JPG off");
     });
+
+    if (toggleFullGhostEl) {
+      toggleFullGhostEl.addEventListener("change", () => {
+        state.forest.showFullGhost = !!toggleFullGhostEl.checked;
+        saveState();
+        debouncedForest();
+        toast(state.forest.showFullGhost ? "Full ghost on" : "Full ghost off");
+      });
+    }
 
     el("btnExportPNG").addEventListener("click", () => {
       try {
         const dateISO = new Date().toISOString().slice(0,10);
-        const url = forestPngDataUrl(state.forest.hiResPng ? 2 : 1);
-        downloadDataUrl(`forest_${dateISO}${state.forest.hiResPng ? "_hires" : ""}.png`, url);
-        toast("Exported PNG");
+        const url = forestCardDataUrl("image/jpeg", 0.92, state.forest.hiResPng ? 2 : 1);
+        downloadDataUrl(`forest_${dateISO}.jpg`, url);
+        toast("Exported JPG");
       } catch {
-        toast("PNG export failed");
+        toast("JPG export failed");
       }
     });
 
@@ -3472,7 +3783,7 @@
       if (key === "m" && gm.g && (Date.now() - gm.t) < 900) {
         if (!isTypingTarget(e)) {
           gm.g = false;
-          const md = generateMarkdown();
+          const md = generateMarkdown({ forestFilename: "forest.jpg", graphFilename: "concept_graph.jpg" });
           setMdPreview(md);
           toast("Generated markdown");
         }
