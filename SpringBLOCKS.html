@@ -8,31 +8,70 @@
   <title>Semester Dashboard — Modes + .md Export</title>
   <style>
     :root {
-      --bg: #ffffff;
+      --bg: #fbfaf7;
+      --bg-grad-1: #fffdfa;
+      --bg-grad-2: #f1ebdf;
       --panel: #ffffff;
-      --panel2: #ffffff;
-      --text: #111111;
-      --muted: #666666;
-      --line: #e6e6e6;
-      --accent: #f5f5f5;
-      --chip: #f3f3f3;
+      --panel2: #f6f4ef;
+      --text: #1f1b16;
+      --muted: #6f675d;
+      --line: #e7e1d7;
+      --accent: #efeae0;
+      --chip: #f3eee5;
       --danger: #d92b4b;
       --ok: #1faa7a;
       --warn: #d9a12b;
       --radius: 16px;
-      --shadow: none;
-      --shadowSoft: none;
+      --shadow: 0 18px 40px rgba(32, 24, 14, 0.08);
+      --shadowSoft: 0 8px 16px rgba(32, 24, 14, 0.05);
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       --serif: "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
       --sans: "Avenir Next", "Gill Sans", "Trebuchet MS", "Segoe UI", Arial, sans-serif;
+      --ink: #2b2620;
+    }
+    body[data-theme="bright"] {
+      --bg: #ffffff;
+      --bg-grad-1: #ffffff;
+      --bg-grad-2: #f4f4f4;
+      --panel: #ffffff;
+      --panel2: #f7f7f7;
+      --text: #111111;
+      --muted: #666666;
+      --line: #e6e6e6;
+      --accent: #f2f2f2;
+      --chip: #f3f3f3;
       --ink: #2d2a26;
+      --shadow: 0 16px 34px rgba(32, 32, 32, 0.08);
+      --shadowSoft: 0 8px 16px rgba(32, 32, 32, 0.05);
+    }
+    body[data-theme="dark"] {
+      --bg: #141210;
+      --bg-grad-1: #191613;
+      --bg-grad-2: #0f0d0b;
+      --panel: #1c1a17;
+      --panel2: #23201c;
+      --text: #e8e4dc;
+      --muted: #b0a79a;
+      --line: #2c2924;
+      --accent: #26231f;
+      --chip: #2a2722;
+      --ink: #f0ece4;
+      --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      --shadowSoft: 0 8px 16px rgba(0, 0, 0, 0.25);
+    }
+    body[data-theme="dark"] header {
+      background: rgba(20, 18, 16, 0.72);
+      border-bottom-color: rgba(255, 255, 255, 0.06);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: var(--sans);
-      background: var(--bg);
+      background:
+        radial-gradient(1200px 900px at 15% 0%, var(--bg-grad-1) 0%, var(--bg) 55%),
+        linear-gradient(180deg, var(--bg-grad-1) 0%, var(--bg-grad-2) 100%);
       color: var(--text);
+      transition: background .18s ease, color .18s ease;
     }
     :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 10px; }
 
@@ -40,20 +79,42 @@
       position: sticky;
       top: 0;
       z-index: 10;
-      background: #ffffff;
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--line);
     }
     .wrap { max-width: 1180px; margin: 0 auto; padding: 18px 18px 48px; }
     .topbar {
       display: grid;
-      grid-template-columns: 1.4fr 1fr;
-      gap: 14px;
-      align-items: start;
+      grid-template-columns: 1.6fr 1fr;
+      gap: 18px;
+      align-items: center;
     }
-    h1 { margin: 4px 0 2px; font-size: 19px; letter-spacing: .4px; font-family: var(--sans); }
-    .subtitle { color: var(--muted); font-size: 13px; line-height: 1.4; }
+    h1 { margin: 0 0 4px; font-size: 18px; letter-spacing: .3px; font-family: var(--sans); }
+    .subtitle { color: var(--muted); font-size: 12px; line-height: 1.4; }
     .controls {
       display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;
+    }
+    .controls details {
+      border: 1px solid var(--line);
+      background: var(--panel2);
+      border-radius: 12px;
+      padding: 6px 10px;
+    }
+    .controls details[open] {
+      box-shadow: var(--shadowSoft);
+    }
+    .controls summary {
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+      list-style: none;
+    }
+    .controls summary::-webkit-details-marker { display: none; }
+    .controls .utility-actions {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
     }
     button, .btn {
       border: 1px solid var(--line);
@@ -65,12 +126,23 @@
       box-shadow: none;
       font-weight: 600;
       font-size: 13px;
+      transition: background .18s ease, border-color .18s ease, color .18s ease, box-shadow .18s ease;
     }
-    button:hover { border-color: var(--ink); background: #f7f7f7; }
+    button:hover { border-color: var(--ink); background: var(--accent); }
     button:active { transform: translateY(1px); }
-    .btn-secondary { background: #f7f7f7; box-shadow: none; }
+    .btn-secondary { background: var(--accent); box-shadow: none; }
     .btn-danger { border-color: rgba(255,92,122,.35); }
     .btn-danger:hover { border-color: rgba(255,92,122,.65); }
+    .theme-switch { display: flex; gap: 6px; align-items: center; }
+    .theme-switch select {
+      border: 1px solid var(--line);
+      background: var(--panel2);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
 
     main { padding-top: 18px; }
     .grid {
@@ -89,7 +161,44 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       padding: 18px;
-      box-shadow: none;
+      box-shadow: var(--shadowSoft);
+      position: relative;
+      transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease, opacity .18s ease;
+    }
+    .card-toggle {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      border: 1px solid var(--line);
+      background: var(--panel2);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .card-toggle:hover { background: var(--accent); border-color: var(--ink); }
+    body.card-focus { overflow: hidden; }
+    body.card-focus::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.08);
+      z-index: 50;
+    }
+    .card.expanded {
+      position: fixed;
+      inset: 78px 22px 22px;
+      z-index: 70;
+      box-shadow: var(--shadow);
+      overflow: auto;
+      transform: translateZ(0);
+    }
+    .card.dimmed {
+      opacity: 0.2;
+      filter: blur(0.6px) saturate(0.9);
+      pointer-events: none;
     }
     .card h2 {
       margin: 0 0 10px;
@@ -104,12 +213,13 @@
     input[type="text"], input[type="number"], textarea, select {
       width: 100%;
       border: 1px solid var(--line);
-      background: #ffffff;
+      background: var(--panel2);
       color: var(--text);
       padding: 10px 10px;
       border-radius: 12px;
       outline: none;
       font-size: 13px;
+      transition: background .18s ease, border-color .18s ease, color .18s ease;
     }
     textarea { min-height: 92px; resize: vertical; }
     .mini { font-size: 12px; color: var(--muted); margin-top: 8px; }
@@ -126,14 +236,24 @@
       font-size: 12px;
       color: var(--text);
       user-select: none;
+      transition: background .18s ease, border-color .18s ease, color .18s ease;
     }
     .chip input { transform: translateY(1px); }
+    .chip .chip-btn {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 2px 6px;
+      font-size: 11px;
+      cursor: pointer;
+    }
     .pill {
       font-family: var(--mono);
       padding: 5px 8px;
       border-radius: 999px;
       border: 1px solid var(--line);
-      background: #ffffff;
+      background: var(--panel2);
       color: var(--muted);
       font-size: 11px;
       white-space: nowrap;
@@ -158,9 +278,10 @@
       align-items: center;
       padding: 9px 10px;
       border: 1px solid var(--line);
-      background: #ffffff;
+      background: var(--panel2);
       border-radius: 14px;
       margin-bottom: 8px;
+      transition: background .18s ease, border-color .18s ease, color .18s ease;
     }
     .task input[type="checkbox"] { width: 18px; height: 18px; }
     .task input[type="text"] { padding: 9px 9px; }
@@ -195,7 +316,7 @@
       line-height: 1.45;
       white-space: pre-wrap;
       border: 1px dashed var(--ink);
-      background: #ffffff;
+      background: var(--panel2);
       padding: 12px;
       border-radius: 14px;
       min-height: 160px;
@@ -278,7 +399,7 @@
       right: 16px;
       bottom: 16px;
       z-index: 50;
-      background: #ffffff;
+      background: var(--panel);
       border: 1px solid var(--line);
       box-shadow: none;
       padding: 10px 12px;
@@ -295,7 +416,7 @@
     /* Inline form */
     .inlineForm {
       border: 1px solid var(--line);
-      background: #ffffff;
+      background: var(--panel2);
       border-radius: 14px;
       padding: 10px;
       margin-top: 10px;
@@ -309,7 +430,7 @@
 
     .forestWrap {
       border: 1px solid var(--line);
-      background: #ffffff;
+      background: var(--panel2);
       border-radius: 14px;
       padding: 10px;
       margin-top: 10px;
@@ -320,12 +441,12 @@
       height: 900px; /* taller to show mycelium network beneath labels */
       display: block;
       border-radius: 12px;
-      background: #ffffff;
+      background: var(--panel);
     }
     .forestLegend {
       margin-top: 10px;
       border: 1px solid var(--line);
-      background: #ffffff;
+      background: var(--panel2);
       border-radius: 14px;
       padding: 10px;
       font-size: 12px;
@@ -342,8 +463,11 @@
       height: 320px;
       display: block;
       border-radius: 12px;
-      background: #ffffff;
+      background: var(--panel);
       border: 1px solid var(--line);
+    }
+    @media (max-width: 980px) {
+      .card.expanded { inset: 72px 12px 12px; }
     }
     .graphHint { font-size: 12px; color: var(--muted); margin-top: 8px; }
 
@@ -358,23 +482,31 @@
 <header>
   <div class="wrap topbar">
     <div>
-      <h1>Semester Dashboard — Courses, Modes, Writing + Obsidian Export</h1>
+      <h1>WILL HALLETT EES/GCAS SPRING 2026</h1>
       <div class="subtitle">
         Default posture: <span class="pill">9–5 = material-building</span> • evenings/weekends = deliverables.
         Everything auto-saves locally.
-        <span class="pill ink">Shortcuts:</span>
-        <span class="pill">n = new Today task</span>
-        <span class="pill">w = new Weekend deliverable</span>
-        <span class="pill">g then m = generate .md</span>
-        <span class="pill">Ctrl/⌘+S = save</span>
       </div>
     </div>
     <div class="controls">
-      <button class="btn-secondary" id="btnResetDay">Reset “Day” checkboxes</button>
-      <button class="btn-secondary" id="btnResetWeek">Weekly reset</button>
-      <button class="btn-secondary" id="btnBackup">Export JSON backup</button>
+      <label class="chip tight theme-switch">
+        <span>Theme</span>
+        <select id="themeSelect" aria-label="Theme mode">
+          <option value="soft">Soft</option>
+          <option value="bright">Bright</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <button class="btn-secondary" id="btnResetDay">Reset “Day”</button>
       <button class="btn-secondary" id="btnPrintPreview">Print preview</button>
-      <button class="btn-danger" id="btnHardReset">Hard reset (wipe local)</button>
+      <details>
+        <summary>Utilities</summary>
+        <div class="utility-actions">
+          <button class="btn-secondary" id="btnResetWeek">Weekly reset</button>
+          <button class="btn-secondary" id="btnBackup">Export JSON backup</button>
+          <button class="btn-danger" id="btnHardReset">Hard reset (wipe local)</button>
+        </div>
+      </details>
     </div>
   </div>
 </header>
@@ -524,7 +656,7 @@
 
     <div class="stack-col">
       <!-- Writing sessions -->
-      <section class="card">
+      <section class="card focus-card">
         <div class="section-title">
           <h2>GCAS Writing</h2>
           <div class="hint">Light, consistent, non-sprawling</div>
@@ -550,7 +682,7 @@
       </section>
 
       <!-- Prose writing -->
-      <section class="card">
+      <section class="card focus-card">
         <div class="section-title">
           <h2>Prose Writing</h2>
           <div class="hint">Drafts, reflections, and narrative output</div>
@@ -650,7 +782,7 @@
 <script>
   // ---------- Version + migration ----------
   const STORAGE_KEY = "semester_dashboard_v1";
-  const CURRENT_VERSION = 9; // add GPT response + analyses + full ghost
+  const CURRENT_VERSION = 10; // add theme preference
 
   const DEFAULT = {
     version: CURRENT_VERSION,
@@ -709,6 +841,7 @@
     mdCache: "",
     lastExport: null,
     printPreview: false,
+    theme: "soft",
     llmKey: "",
     llmNoteAnalyses: {},
     llmConferenceResponse: "",
@@ -783,6 +916,10 @@
       s.forest.showFullGhost = s.forest.showFullGhost ?? false;
       s.version = 9;
     }
+    if (v < 10) {
+      s.theme = s.theme ?? "soft";
+      s.version = 10;
+    }
     return s;
   }
 
@@ -833,6 +970,7 @@
   const coreWindowEl = el("coreWindow");
   const weekendPostureEl = el("weekendPosture");
   const rebalanceDayEl = el("rebalanceDay");
+  const themeSelectEl = el("themeSelect");
   const modeChipsEl = el("modeChips");
   const modeEditorEl = el("modeEditor");
   const newModeLabelEl = el("newModeLabel");
@@ -917,6 +1055,16 @@
       clearTimeout(t);
       t = setTimeout(() => fn(...args), ms);
     };
+  }
+
+  function applyTheme(theme) {
+    const next = ["bright", "soft", "dark"].includes(theme) ? theme : "soft";
+    document.body.dataset.theme = next;
+    if (state) {
+      state.theme = next;
+      saveState();
+    }
+    if (themeSelectEl) themeSelectEl.value = next;
   }
 
   // ISO week id: YYYY-Www
@@ -1045,7 +1193,7 @@
       const data = state.courseNotes[course];
 
       const card = document.createElement("div");
-      card.className = "card";
+      card.className = "card course-card";
       card.style.marginBottom = "10px";
 
       const title = document.createElement("div");
@@ -1136,11 +1284,12 @@
       const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
       weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions}/6 • Today: ${(dayScore * 100).toFixed(0)}%`;
 
-      courseCardsEl.appendChild(card);
-    });
-    saveState();
-    renderWeekSummary();
-  }
+    courseCardsEl.appendChild(card);
+  });
+  saveState();
+  renderWeekSummary();
+  setupCardToggles();
+}
 
   function taskRow(task, listName) {
     const row = document.createElement("div");
@@ -1228,6 +1377,50 @@
 
     weekendTasksEl.innerHTML = "";
     state.weekendTasks.forEach((t) => weekendTasksEl.appendChild(taskRow(t, "weekendTasks")));
+  }
+
+  // ---------- Card focus ----------
+  let expandedCard = null;
+
+  function setCardFocus(card, active) {
+    const cards = Array.from(document.querySelectorAll(".card"));
+    const containerCard = card?.parentElement?.closest(".card");
+    if (active) {
+      expandedCard = card;
+      document.body.classList.add("card-focus");
+      cards.forEach((c) => {
+        const keepClear = c === card || c === containerCard;
+        c.classList.toggle("expanded", c === card);
+        c.classList.toggle("dimmed", !keepClear);
+      });
+      const btn = card.querySelector(".card-toggle");
+      if (btn) btn.textContent = "Collapse";
+    } else {
+      expandedCard = null;
+      document.body.classList.remove("card-focus");
+      cards.forEach((c) => c.classList.remove("expanded", "dimmed"));
+      cards.forEach((c) => {
+        const btn = c.querySelector(".card-toggle");
+        if (btn) btn.textContent = "Focus";
+      });
+    }
+  }
+
+  function setupCardToggles() {
+    const cards = document.querySelectorAll(".card");
+    cards.forEach((card) => {
+      if (card.querySelector(".card-toggle")) return;
+      const btn = document.createElement("button");
+      btn.className = "card-toggle";
+      btn.type = "button";
+      btn.textContent = "Focus";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const isActive = card.classList.contains("expanded");
+        setCardFocus(card, !isActive);
+      });
+      card.appendChild(btn);
+    });
   }
 
   // ---------- Concept graph ----------
@@ -1340,7 +1533,7 @@
     if (!conceptGraphCanvas || !graphState) return;
     const { ctx, w, h } = initCanvasHiDPI(conceptGraphCanvas);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = getCSSVar("--panel");
     ctx.fillRect(0, 0, w, h);
 
     const { nodes, edges } = graphState.data;
@@ -2715,7 +2908,7 @@
       const weekly = weeklyScoreForCourse(course, weekId);
       const status = (state.courseNotes?.[course]?.status || "steady");
       return `
-        <div style="display:grid;gap:4px;padding:8px;border:1px dashed rgba(58,61,94,.2);border-radius:10px;background:rgba(255,255,255,0.35);">
+        <div style="display:grid;gap:4px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);">
           <div><b>${escapeHtml(course)}</b> <span class="pill">${status}</span></div>
           <div>Words ${words} • SentLen ${avgSentenceLen.toFixed(1)} • Punct ${(punctuationPerWord * 100).toFixed(1)}%</div>
           <div>Syntax ${(syntax * 100).toFixed(1)}% • Cohesion ${(cohesion * 100).toFixed(1)}% • Diversity ${(diversityN * 100).toFixed(1)}%</div>
@@ -2743,7 +2936,7 @@
 
     const { ctx, w, h } = initCanvasHiDPI(forestCanvas);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = getCSSVar("--panel");
     ctx.fillRect(0, 0, w, h);
 
     const courses = state.courses || [];
@@ -3348,6 +3541,8 @@
     coreWindowEl.value = state.coreWindow || "";
     weekendPostureEl.value = state.weekendPosture || "";
     rebalanceDayEl.value = state.rebalanceDay || "Sunday";
+    if (themeSelectEl) themeSelectEl.value = state.theme || "soft";
+    applyTheme(state.theme || "soft");
 
     absorptionEl.value = state.absorption || "";
     workoutEl.value = state.workout || "";
@@ -3375,6 +3570,7 @@
     renderTasks();
     renderWeekSummary();
     renderConceptGraph();
+    setupCardToggles();
 
     if (state.mdCache) mdPreviewEl.textContent = state.mdCache;
 
@@ -3391,6 +3587,7 @@
   coreWindowEl.addEventListener("input", () => { state.coreWindow = coreWindowEl.value; saveState(); });
   weekendPostureEl.addEventListener("input", () => { state.weekendPosture = weekendPostureEl.value; saveState(); });
   rebalanceDayEl.addEventListener("change", () => { state.rebalanceDay = rebalanceDayEl.value; saveState(); });
+  themeSelectEl?.addEventListener("change", () => { applyTheme(themeSelectEl.value); });
 
   keystoneTodayEl.addEventListener("change", () => {
     state.keystoneToday = keystoneTodayEl.value;
@@ -3749,58 +3946,11 @@
       toast("Cleared last-week ghost");
     });
 
-    // ---------- Keyboard shortcuts ----------
-    function isTypingTarget(evt){
-      const t = evt.target;
-      if (!t) return false;
-      const tag = (t.tagName || "").toLowerCase();
-      return tag === "input" || tag === "textarea" || tag === "select";
-    }
-
-    window.addEventListener("keydown", (e) => {
-      // Save (Ctrl/⌘+S)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        saveState();
-        toast("Saved");
-        return;
-      }
-
-      // "g then m" for markdown generation
-      // simple two-key chord within 900ms
-      if (!window.__gmState) window.__gmState = { t: 0, g: false };
-      const gm = window.__gmState;
-
-      const key = e.key.toLowerCase();
-
-      if (key === "g" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (!isTypingTarget(e)) {
-          gm.g = true;
-          gm.t = Date.now();
-          return;
-        }
-      }
-      if (key === "m" && gm.g && (Date.now() - gm.t) < 900) {
-        if (!isTypingTarget(e)) {
-          gm.g = false;
-          const md = generateMarkdown({ forestFilename: "forest.jpg", graphFilename: "concept_graph.jpg" });
-          setMdPreview(md);
-          toast("Generated markdown");
-        }
-        return;
-      }
-      if ((Date.now() - gm.t) >= 900) gm.g = false;
-
-      if (key === "escape" && state.printPreview) {
-        setPrintPreview(false);
-        return;
-      }
-
-      // Add tasks (n / w) when not typing
-      if (!isTypingTarget(e) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (key === "n") { el("btnAddTodayTask").click(); }
-        if (key === "w") { el("btnAddWeekendTask").click(); }
-      }
+    document.addEventListener("click", (e) => {
+      if (!expandedCard) return;
+      if (expandedCard.contains(e.target)) return;
+      if (e.target.closest(".card-toggle")) return;
+      setCardFocus(expandedCard, false);
     });
 
     // ---------- Responsive: rerender canvas on resize ----------
