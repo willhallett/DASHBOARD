@@ -1,3 +1,5 @@
+<!-- CANARY: local edit -->
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -9,26 +11,27 @@
       --bg: #ffffff;
       --panel: #ffffff;
       --panel2: #ffffff;
-      --text: #5a5a5a;
-      --muted: #a7a8b6;
-      --line: #dbdbdb;
-      --accent: #f5f5ff;
-      --chip: #cacbd1bf;
-      --danger: #ff5c7a;
-      --ok: #5cffc4;
-      --warn: #ffd15c;
+      --text: #111111;
+      --muted: #666666;
+      --line: #e6e6e6;
+      --accent: #f5f5f5;
+      --chip: #f3f3f3;
+      --danger: #d92b4b;
+      --ok: #1faa7a;
+      --warn: #d9a12b;
       --radius: 16px;
-      --shadow: 0 10px 30px rgba(144, 144, 144, 0.35);
-      --shadowSoft: 0 6px 18px rgba(144, 144, 144, 0.22);
+      --shadow: none;
+      --shadowSoft: none;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-      --ink: #3a3d5e;
+      --serif: "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
+      --sans: "Avenir Next", "Gill Sans", "Trebuchet MS", "Segoe UI", Arial, sans-serif;
+      --ink: #2d2a26;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: var(--sans);
-      background: radial-gradient(1200px 900px at 20% 0%, #ffffff 0%, var(--bg) 55%);
+      background: var(--bg);
       color: var(--text);
     }
     :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 10px; }
@@ -37,8 +40,7 @@
       position: sticky;
       top: 0;
       z-index: 10;
-      backdrop-filter: blur(10px);
-      background: rgba(255, 255, 255, 0.7);
+      background: #ffffff;
       border-bottom: 1px solid var(--line);
     }
     .wrap { max-width: 1180px; margin: 0 auto; padding: 18px 18px 48px; }
@@ -48,25 +50,25 @@
       gap: 14px;
       align-items: start;
     }
-    h1 { margin: 4px 0 2px; font-size: 18px; letter-spacing: .2px; }
+    h1 { margin: 4px 0 2px; font-size: 19px; letter-spacing: .4px; font-family: var(--sans); }
     .subtitle { color: var(--muted); font-size: 13px; line-height: 1.4; }
     .controls {
       display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;
     }
     button, .btn {
       border: 1px solid var(--line);
-      background: linear-gradient(180deg, #ffffff, #e6e6e6);
+      background: var(--panel2);
       color: var(--text);
       padding: 10px 12px;
       border-radius: 12px;
       cursor: pointer;
-      box-shadow: var(--shadowSoft);
+      box-shadow: none;
       font-weight: 600;
       font-size: 13px;
     }
-    button:hover { border-color: var(--ink); }
+    button:hover { border-color: var(--ink); background: #f7f7f7; }
     button:active { transform: translateY(1px); }
-    .btn-secondary { background: linear-gradient(180deg, #ffffff, #d0d0d0); box-shadow: none; }
+    .btn-secondary { background: #f7f7f7; box-shadow: none; }
     .btn-danger { border-color: rgba(255,92,122,.35); }
     .btn-danger:hover { border-color: rgba(255,92,122,.65); }
 
@@ -83,16 +85,17 @@
     }
 
     .card {
-      background: linear-gradient(180deg, rgb(255, 255, 255), rgb(255, 255, 255));
+      background: var(--panel);
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      padding: 14px;
-      box-shadow: var(--shadow);
+      padding: 18px;
+      box-shadow: none;
     }
     .card h2 {
       margin: 0 0 10px;
-      font-size: 14px;
-      letter-spacing: .25px;
+      font-size: 15px;
+      letter-spacing: .6px;
+      font-family: var(--sans);
     }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .row > * { flex: 1; }
@@ -101,7 +104,7 @@
     input[type="text"], input[type="number"], textarea, select {
       width: 100%;
       border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.65);
+      background: #ffffff;
       color: var(--text);
       padding: 10px 10px;
       border-radius: 12px;
@@ -130,7 +133,7 @@
       padding: 5px 8px;
       border-radius: 999px;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,.25);
+      background: #ffffff;
       color: var(--muted);
       font-size: 11px;
       white-space: nowrap;
@@ -143,6 +146,8 @@
       gap: 10px;
       align-items: baseline;
       margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px dashed rgba(45,42,38,.15);
     }
     .section-title .hint { color: var(--muted); font-size: 12px; }
 
@@ -153,7 +158,7 @@
       align-items: center;
       padding: 9px 10px;
       border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.55);
+      background: #ffffff;
       border-radius: 14px;
       margin-bottom: 8px;
     }
@@ -178,6 +183,11 @@
       gap: 10px;
     }
     @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+    .stack-col {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 14px;
+    }
 
     .mdbox {
       font-family: var(--mono);
@@ -185,7 +195,7 @@
       line-height: 1.45;
       white-space: pre-wrap;
       border: 1px dashed var(--ink);
-      background: rgba(255, 255, 255, 0.25);
+      background: #ffffff;
       padding: 12px;
       border-radius: 14px;
       min-height: 160px;
@@ -268,9 +278,9 @@
       right: 16px;
       bottom: 16px;
       z-index: 50;
-      background: rgba(255,255,255,.92);
+      background: #ffffff;
       border: 1px solid var(--line);
-      box-shadow: var(--shadowSoft);
+      box-shadow: none;
       padding: 10px 12px;
       border-radius: 14px;
       font-size: 12px;
@@ -285,7 +295,7 @@
     /* Inline form */
     .inlineForm {
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.55);
+      background: #ffffff;
       border-radius: 14px;
       padding: 10px;
       margin-top: 10px;
@@ -299,7 +309,7 @@
 
     .forestWrap {
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.55);
+      background: #ffffff;
       border-radius: 14px;
       padding: 10px;
       margin-top: 10px;
@@ -307,15 +317,15 @@
     }
     canvas#forestCanvas {
       width: 100%;
-      height: 680px; /* taller to show mycelium network beneath labels */
+      height: 900px; /* taller to show mycelium network beneath labels */
       display: block;
       border-radius: 12px;
-      background: rgba(255,255,255,0.35);
+      background: #ffffff;
     }
     .forestLegend {
       margin-top: 10px;
-      border: 1px dashed rgba(58,61,94,.35);
-      background: rgba(255,255,255,0.35);
+      border: 1px solid var(--line);
+      background: #ffffff;
       border-radius: 14px;
       padding: 10px;
       font-size: 12px;
@@ -332,8 +342,8 @@
       height: 320px;
       display: block;
       border-radius: 12px;
-      background: rgba(255,255,255,0.45);
-      border: 1px dashed rgba(58,61,94,.2);
+      background: #ffffff;
+      border: 1px solid var(--line);
     }
     .graphHint { font-size: 12px; color: var(--muted); margin-top: 8px; }
   </style>
@@ -357,7 +367,7 @@
     </div>
     <div class="controls">
       <button class="btn-secondary" id="btnResetDay">Reset “Day” checkboxes</button>
-      <button class="btn-secondary" id="btnResetWeek">Reset “Week” checkboxes</button>
+      <button class="btn-secondary" id="btnResetWeek">Weekly reset</button>
       <button class="btn-secondary" id="btnBackup">Export JSON backup</button>
       <button class="btn-secondary" id="btnPrintPreview">Print preview</button>
       <button class="btn-danger" id="btnHardReset">Hard reset (wipe local)</button>
@@ -398,6 +408,14 @@
       </div>
 
       <label style="margin-top:12px;">Modes checklist (daily + weekly anchors)</label>
+      <div class="row inlineForm show" id="modeEditor" style="margin-bottom:8px;">
+        <input type="text" id="newModeLabel" placeholder="Add mode label" />
+        <select id="newModeScope">
+          <option value="daily">daily</option>
+          <option value="weekly" selected>weekly</option>
+        </select>
+        <button class="btn-secondary tight" id="btnAddMode">Add</button>
+      </div>
       <div class="chips" id="modeChips"></div>
 
       <div class="footer-note">
@@ -496,72 +514,61 @@
       <div id="courseCards" style="margin-top:12px;"></div>
     </section>
 
-    <!-- Writing sessions -->
-    <section class="card">
-      <div class="section-title">
-        <h2>GCAS Writing</h2>
-        <div class="hint">Light, consistent, non-sprawling</div>
-      </div>
-
-      <div class="cols" style="margin-top:10px;">
-        <div>
-          <label>GCAS schedule</label>
-          <input type="text" id="writingSchedule" placeholder="e.g., Tue/Thu afternoons" />
+    <div class="stack-col">
+      <!-- Writing sessions -->
+      <section class="card">
+        <div class="section-title">
+          <h2>GCAS Writing</h2>
+          <div class="hint">Light, consistent, non-sprawling</div>
         </div>
-        <div>
-          <label>Current writing thread</label>
-          <input type="text" id="writingThread" placeholder="e.g., Neural Set; Saussure/Lacan; modeling epistemology" />
-        </div>
-        <div>
-          <label>GCAS targets</label>
-          <input type="text" id="writingTargets" placeholder="e.g., 300 words target; Badiou set theory; Freud neurobiology" />
-        </div>
-      </div>
-      <label style="margin-top:12px;">GCAS notes</label>
-      <textarea id="writingNotes" placeholder="Short synthesis, questions, or conceptual bridges to keep."></textarea>
-      <div class="footer-note">Keep cadence and conceptual targets lightweight but explicit.</div>
-    </section>
 
-    <!-- Concept graph -->
-    <section class="card" style="grid-column: 1 / 2;">
-      <div class="section-title">
-        <h2>Concept Graph (3D)</h2>
-        <div class="hint">Major concepts and linkages across writing</div>
-      </div>
-      <canvas id="conceptGraphCanvas" aria-label="3D concept linkage graph"></canvas>
-      <div class="row" style="margin-top:10px;">
-        <button class="btn-secondary" id="btnRegenGraph">Regenerate graph</button>
-      </div>
-      <div class="graphHint">Drag to rotate; scroll to zoom. Nodes are inferred from all writing artifacts.</div>
-    </section>
-
-    <!-- Prose writing -->
-    <section class="card" style="grid-column: 2 / 3;">
-      <div class="section-title">
-        <h2>Prose Writing</h2>
-        <div class="hint">Drafts, reflections, and narrative output</div>
-      </div>
-
-      <div class="cols" style="margin-top:10px;">
-        <div>
-          <label>Prose schedule</label>
-          <input type="text" id="proseSchedule" placeholder="e.g., Wed/Fri afternoons" />
+        <div class="cols" style="margin-top:10px;">
+          <div>
+            <label>GCAS schedule</label>
+            <input type="text" id="writingSchedule" placeholder="e.g., Tue/Thu afternoons" />
+          </div>
+          <div>
+            <label>Current writing thread</label>
+            <input type="text" id="writingThread" placeholder="e.g., Neural Set; Saussure/Lacan; modeling epistemology" />
+          </div>
+          <div>
+            <label>GCAS targets</label>
+            <input type="text" id="writingTargets" placeholder="e.g., 300 words target; Badiou set theory; Freud neurobiology" />
+          </div>
         </div>
-        <div>
-          <label>Current prose project</label>
-          <input type="text" id="proseProject" placeholder="e.g., Semester reflection essay; narrative recap" />
-        </div>
-        <div>
-          <label>Prose targets</label>
-          <input type="text" id="proseTargets" placeholder="e.g., 300 words; draft scene; revision focus" />
-        </div>
-      </div>
+        <label style="margin-top:12px;">GCAS notes</label>
+        <textarea id="writingNotes" placeholder="Short synthesis, questions, or conceptual bridges to keep."></textarea>
+        <div class="footer-note">Keep cadence and conceptual targets lightweight but explicit.</div>
+      </section>
 
-      <label style="margin-top:12px;">Prose notes</label>
-      <textarea id="proseNotes" placeholder="Short notes, tone cues, or narrative beats to keep." ></textarea>
+      <!-- Prose writing -->
+      <section class="card">
+        <div class="section-title">
+          <h2>Prose Writing</h2>
+          <div class="hint">Drafts, reflections, and narrative output</div>
+        </div>
 
-      <div class="footer-note">Separate from GCAS; keep prose constraints visible.</div>
-    </section>
+        <div class="cols" style="margin-top:10px;">
+          <div>
+            <label>Prose schedule</label>
+            <input type="text" id="proseSchedule" placeholder="e.g., Wed/Fri afternoons" />
+          </div>
+          <div>
+            <label>Current prose project</label>
+            <input type="text" id="proseProject" placeholder="e.g., Semester reflection essay; narrative recap" />
+          </div>
+          <div>
+            <label>Prose targets</label>
+            <input type="text" id="proseTargets" placeholder="e.g., 300 words; draft scene; revision focus" />
+          </div>
+        </div>
+
+        <label style="margin-top:12px;">Prose notes</label>
+        <textarea id="proseNotes" placeholder="Short notes, tone cues, or narrative beats to keep." ></textarea>
+
+        <div class="footer-note">Separate from GCAS; keep prose constraints visible.</div>
+      </section>
+    </div>
   </div>
 
   <div class="grid" style="margin-top:14px;">
@@ -594,6 +601,7 @@
         <button id="btnGenerateMd">Generate Markdown</button>
         <button class="btn-secondary" id="btnCopyMd">Copy</button>
         <button class="btn-secondary" id="btnDownloadMd">Download .md</button>
+        <button class="btn-secondary" id="btnClearMd">Clear Markdown</button>
         <button class="btn-secondary" id="btnArchiveBundle">Archive bundle</button>
       </div>
 
@@ -602,9 +610,28 @@
 
       <div class="statusline" style="margin-top:10px;">
         <span class="dot ok"></span><span class="mini">Saved locally</span>
-        <span class="dot warn"></span><span class="mini">Reset week = clears “weekly” checkboxes only</span>
+        <span class="dot warn"></span><span class="mini">Reset week = clears writing + tasks + mode checks</span>
         <span class="dot bad"></span><span class="mini">Hard reset wipes everything</span>
       </div>
+    </section>
+  </div>
+
+  <div class="grid" style="margin-top:14px;">
+    <!-- Concept graph -->
+    <section class="card span2">
+      <div class="section-title">
+        <h2>Concept Graph (3D)</h2>
+        <div class="hint">Major concepts and linkages across writing</div>
+      </div>
+      <canvas id="conceptGraphCanvas" aria-label="3D concept linkage graph"></canvas>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn-secondary" id="btnRegenGraph">Regenerate graph</button>
+        <label class="chip tight" style="padding:6px 10px;">
+          <span style="margin-right:6px;">Spacing</span>
+          <input type="range" id="graphSpacing" min="0.8" max="4.5" step="0.1" value="4.5" />
+        </label>
+      </div>
+      <div class="graphHint">Drag to rotate; scroll to zoom. Nodes are inferred from all writing artifacts.</div>
     </section>
   </div>
 </main>
@@ -614,7 +641,7 @@
 <script>
   // ---------- Version + migration ----------
   const STORAGE_KEY = "semester_dashboard_v1";
-  const CURRENT_VERSION = 7; // bumped for concept graph + schedule inputs
+  const CURRENT_VERSION = 8; // bumped for weekly forest tracking
 
   const DEFAULT = {
     version: CURRENT_VERSION,
@@ -680,6 +707,7 @@
       weekId: "",
       perCourseMax: {},   // max-memory for writing volume / syntax / cohesion / completed tasks
       hiResPng: false,
+      weekly: { weekId: "", courses: {} },
     }
   };
 
@@ -728,6 +756,11 @@
       s.proseTargets = s.proseTargets ?? structuredDefault().proseTargets;
       s.env = s.env ?? null;
       s.version = 7;
+    }
+    if (v < 8) {
+      s.forest = s.forest || structuredDefault().forest;
+      s.forest.weekly = s.forest.weekly || structuredDefault().forest.weekly;
+      s.version = 8;
     }
     return s;
   }
@@ -780,6 +813,9 @@
   const weekendPostureEl = el("weekendPosture");
   const rebalanceDayEl = el("rebalanceDay");
   const modeChipsEl = el("modeChips");
+  const modeEditorEl = el("modeEditor");
+  const newModeLabelEl = el("newModeLabel");
+  const newModeScopeEl = el("newModeScope");
 
   const keystoneTodayEl = el("keystoneToday");
   const absorptionEl = el("absorption");
@@ -803,6 +839,7 @@
   const proseNotesEl = el("proseNotes");
   const conceptGraphCanvas = el("conceptGraphCanvas");
   const btnRegenGraph = el("btnRegenGraph");
+  const graphSpacingEl = el("graphSpacing");
 
   const weekendTasksEl = el("weekendTasks");
   const downtimeRuleEl = el("downtimeRule");
@@ -859,6 +896,38 @@
     return isoWeekId(new Date(mondayTarget.getUTCFullYear(), mondayTarget.getUTCMonth(), mondayTarget.getUTCDate()));
   }
 
+  function getETParts(date = new Date()) {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hour12: false
+    });
+    const parts = fmt.formatToParts(date);
+    const out = {};
+    parts.forEach((p) => { out[p.type] = p.value; });
+    return {
+      weekday: out.weekday || "",
+      year: out.year || "1970",
+      month: out.month || "01",
+      day: out.day || "01",
+      hour: Number(out.hour || 0)
+    };
+  }
+
+  function etDateKey(date = new Date()) {
+    const p = getETParts(date);
+    return `${p.year}-${p.month}-${p.day}`;
+  }
+
+  function isMondayAfterNoonET(date = new Date()) {
+    const p = getETParts(date);
+    return p.weekday === "Mon" && p.hour >= 12;
+  }
+
   // ---------- Render helpers ----------
   function renderModeChips() {
     modeChipsEl.innerHTML = "";
@@ -885,9 +954,24 @@
       scope.className = "pill";
       scope.textContent = (state.modeScope?.[label] || "weekly").toUpperCase();
 
+      const del = document.createElement("button");
+      del.className = "del";
+      del.textContent = "×";
+      del.title = "Delete mode";
+      del.addEventListener("click", (e) => {
+        e.preventDefault();
+        delete state.modeChecks[label];
+        delete state.modeScope[label];
+        saveState();
+        renderModeChips();
+        renderWeekSummary();
+        debouncedForest();
+      });
+
       chip.appendChild(cb);
       chip.appendChild(span);
       chip.appendChild(scope);
+      chip.appendChild(del);
       modeChipsEl.appendChild(chip);
     });
   }
@@ -975,20 +1059,36 @@
       notesLabel.textContent = "Notes (what landed / what’s fuzzy / next question)";
       card.appendChild(notesLabel);
 
+      const weeklyBadge = document.createElement("div");
+      weeklyBadge.className = "mini";
+      weeklyBadge.style.marginTop = "6px";
+      card.appendChild(weeklyBadge);
+
       const notes = document.createElement("textarea");
       notes.value = data.notes || "";
       notes.placeholder = "Keep it short. Capture confusion early.";
       notes.addEventListener("input", () => {
         state.courseNotes[course].notes = notes.value;
+        updateWeeklySession(course, notes.value);
         saveState();
+        const weekId = isoWeekId(new Date());
+        const weekly = weeklyScoreForCourse(course, weekId);
+        const todayKey = etDateKey();
+        const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
+        weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions} • Today: ${(dayScore * 100).toFixed(0)}%`;
         debouncedForest(); // update forest as you write
         debouncedGraph();
       });
       card.appendChild(notes);
 
+      const weekId = isoWeekId(new Date());
+      const weekly = weeklyScoreForCourse(course, weekId);
+      const todayKey = etDateKey();
+      const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
+      weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions} • Today: ${(dayScore * 100).toFixed(0)}%`;
+
       courseCardsEl.appendChild(card);
     });
-
     saveState();
     renderWeekSummary();
   }
@@ -1083,6 +1183,7 @@
 
   // ---------- Concept graph ----------
   let graphState = null;
+  let graphSpacing = 4.5;
 
   function collectWritingCorpus() {
     const parts = [];
@@ -1111,10 +1212,10 @@
     const nodes = keywords.map((w) => ({
       id: w,
       label: w,
-      x: (Math.random() - 0.5) * 1.6,
-      y: (Math.random() - 0.5) * 1.6,
-      z: (Math.random() - 0.5) * 1.6,
-      size: 6
+      x: (Math.random() - 0.5) * graphSpacing,
+      y: (Math.random() - 0.5) * graphSpacing,
+      z: (Math.random() - 0.5) * graphSpacing,
+      size: 2
     }));
     const edges = [];
     const sentences = splitSentences(corpus);
@@ -1141,7 +1242,7 @@
     }
 
     nodes.forEach((node) => {
-      node.size = 6 + Math.min(10, (degree.get(node.id) || 1) * 0.6);
+      node.size = 2;
     });
 
     return { nodes, edges };
@@ -1186,39 +1287,11 @@
     }
   }
 
-  function attachGraphHandlers() {
-    conceptGraphCanvas.addEventListener("mousedown", (e) => {
-      graphState.dragging = true;
-      graphState.lastX = e.clientX;
-      graphState.lastY = e.clientY;
-    });
-    window.addEventListener("mouseup", () => {
-      if (graphState) graphState.dragging = false;
-    });
-    window.addEventListener("mousemove", (e) => {
-      if (!graphState?.dragging) return;
-      const dx = e.clientX - graphState.lastX;
-      const dy = e.clientY - graphState.lastY;
-      graphState.rotY += dx * 0.005;
-      graphState.rotX += dy * 0.005;
-      graphState.lastX = e.clientX;
-      graphState.lastY = e.clientY;
-    });
-    conceptGraphCanvas.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      graphState.zoom = clamp(graphState.zoom + e.deltaY * 0.004, 1.0, 12);
-    }, { passive: false });
-    btnRegenGraph?.addEventListener("click", () => {
-      graphState.data = computeConceptGraph();
-      toast("Regenerated concept graph");
-    });
-  }
-
-  function drawConceptGraph() {
+  function drawConceptGraphFrame() {
     if (!conceptGraphCanvas || !graphState) return;
     const { ctx, w, h } = initCanvasHiDPI(conceptGraphCanvas);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, w, h);
 
     const { nodes, edges } = graphState.data;
@@ -1227,7 +1300,6 @@
       ctx.font = "12px " + getCSSVar("--sans");
       ctx.textAlign = "center";
       ctx.fillText("No writing data yet to generate concepts.", w / 2, h / 2);
-      requestAnimationFrame(drawConceptGraph);
       return;
     }
 
@@ -1261,7 +1333,43 @@
       ctx.textAlign = "center";
       ctx.fillText(node.label, p.x, p.y - radius - 4);
     });
+  }
 
+  function attachGraphHandlers() {
+    conceptGraphCanvas.addEventListener("mousedown", (e) => {
+      graphState.dragging = true;
+      graphState.lastX = e.clientX;
+      graphState.lastY = e.clientY;
+    });
+    window.addEventListener("mouseup", () => {
+      if (graphState) graphState.dragging = false;
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!graphState?.dragging) return;
+      const dx = e.clientX - graphState.lastX;
+      const dy = e.clientY - graphState.lastY;
+      graphState.rotY += dx * 0.005;
+      graphState.rotX += dy * 0.005;
+      graphState.lastX = e.clientX;
+      graphState.lastY = e.clientY;
+    });
+    conceptGraphCanvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      graphState.zoom = clamp(graphState.zoom + e.deltaY * 0.004, 1.0, 10);
+    }, { passive: false });
+    btnRegenGraph?.addEventListener("click", () => {
+      graphState.data = computeConceptGraph();
+      toast("Regenerated concept graph");
+    });
+    graphSpacingEl?.addEventListener("input", () => {
+      graphSpacing = Number(graphSpacingEl.value) || 1.6;
+      graphState.data = computeConceptGraph();
+    });
+  }
+
+  function drawConceptGraph() {
+    if (!conceptGraphCanvas || !graphState) return;
+    drawConceptGraphFrame();
     graphState.rotY += 0.0015;
     requestAnimationFrame(drawConceptGraph);
   }
@@ -1352,6 +1460,64 @@
       .slice(0, n);
   }
 
+  function extractAcademicAnchors(text) {
+    const anchors = [
+      "1900s",
+      "continental philosophy",
+      "structuralist mathematics",
+      "theoretical biology",
+      "systems theory",
+      "phenomenology",
+      "network epistemology",
+      "cybernetics",
+      "semiotics",
+      "complex systems"
+    ];
+    const lower = String(text || "").toLowerCase();
+    const hits = anchors.filter(a => lower.includes(a));
+    return hits.map((t) => `#${slugTag(t)}`);
+  }
+
+  function extractKeyConcepts(text, n = 3) {
+    const raw = String(text || "");
+    const normalized = normalizeText(raw);
+    const wordFreq = new Map();
+    contentWords(normalized).forEach(w => wordFreq.set(w, (wordFreq.get(w) || 0) + 1));
+    const phraseFreq = new Map();
+    keyPhrases(raw, 10).forEach(p => phraseFreq.set(p, (phraseFreq.get(p) || 0) + 2));
+    const proper = extractProperNouns(raw, 10);
+    proper.forEach(p => phraseFreq.set(p, (phraseFreq.get(p) || 0) + 3));
+
+    const combined = [
+      ...Array.from(phraseFreq.entries()).map(([k, v]) => ({ k, v })),
+      ...Array.from(wordFreq.entries()).map(([k, v]) => ({ k: titleCasePhrase(k), v }))
+    ];
+    const seen = new Set();
+    const ranked = combined
+      .sort((a, b) => b.v - a.v)
+      .filter(({ k }) => {
+        const key = k.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, n)
+      .map(({ k }) => k);
+    return ranked;
+  }
+
+  function buildNoteAnalysis(noteText) {
+    const concepts = extractKeyConcepts(noteText, 3);
+    const title = concepts.length ? concepts.slice(0, 2).join(" · ") : "Untitled Note";
+    const anchors = [
+      ...new Set([
+        ...formatProperNounTags(noteText),
+        ...extractAcademicAnchors(noteText)
+      ])
+    ];
+    return { title, concepts, anchors };
+  }
+
   function noteKeywords(text, n = 6) {
     return keyPhrases(text, n);
   }
@@ -1395,25 +1561,64 @@
     return `${Math.round(n * 100)}%`;
   }
 
-  function forestPngDataUrl(scale = 1) {
-    renderForest();
-    const src = forestCanvas;
-    if (scale <= 1) return src.toDataURL("image/png");
-    const rect = src.getBoundingClientRect();
-    const w = Math.max(1, Math.floor(rect.width));
-    const h = Math.max(1, Math.floor(rect.height));
-    const tmp = document.createElement("canvas");
-    tmp.width = Math.floor(w * scale);
-    tmp.height = Math.floor(h * scale);
-    const tctx = tmp.getContext("2d");
-    tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
-    return tmp.toDataURL("image/png");
+  function forestPngDataUrl(scale = 1, mime = "image/png", quality = 0.92) {
+    try {
+      renderForest();
+      const src = forestCanvas;
+      if (scale <= 1) return src.toDataURL(mime, quality);
+      const rect = src.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      const tmp = document.createElement("canvas");
+      tmp.width = Math.floor(w * scale);
+      tmp.height = Math.floor(h * scale);
+      const tctx = tmp.getContext("2d");
+      tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
+      return tmp.toDataURL(mime, quality);
+    } catch (err) {
+      console.warn("Forest PNG export failed.", err);
+      return "";
+    }
+  }
+
+  function conceptGraphPngDataUrl(scale = 1, mime = "image/png", quality = 0.92) {
+    try {
+      renderConceptGraph();
+      if (graphState) drawConceptGraphFrame();
+      const src = conceptGraphCanvas;
+      if (!src) return "";
+      if (scale <= 1) return src.toDataURL(mime, quality);
+      const rect = src.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      const tmp = document.createElement("canvas");
+      tmp.width = Math.floor(w * scale);
+      tmp.height = Math.floor(h * scale);
+      const tctx = tmp.getContext("2d");
+      tctx.drawImage(src, 0, 0, w, h, 0, 0, tmp.width, tmp.height);
+      return tmp.toDataURL(mime, quality);
+    } catch (err) {
+      console.warn("Concept graph PNG export failed.", err);
+      return "";
+    }
   }
 
   function exportForestPngForMarkdown(dateISO, hiRes) {
     try {
       const filename = `forest_${dateISO}${hiRes ? "_hires" : ""}.png`;
       const url = forestPngDataUrl(hiRes ? 2 : 1);
+      downloadDataUrl(filename, url);
+      return filename;
+    } catch {
+      return "";
+    }
+  }
+
+  function exportConceptGraphPngForMarkdown(dateISO) {
+    try {
+      const filename = `concept_graph_${dateISO}.png`;
+      const url = conceptGraphPngDataUrl(1);
+      if (!url) return "";
       downloadDataUrl(filename, url);
       return filename;
     } catch {
@@ -1548,6 +1753,61 @@
     URL.revokeObjectURL(url);
   }
 
+  function downloadText(filename, text, mime = "text/plain") {
+    const blob = new Blob([text], { type: mime });
+    downloadBlob(filename, blob);
+  }
+
+  function downloadDataUrl(filename, dataUrl) {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function forestToSVG(geom) {
+    if (!geom) return "";
+    const w = Math.max(1, Math.round(geom.width || 1));
+    const h = Math.max(1, Math.round(geom.height || 1));
+    const parts = [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
+      `<rect width="100%" height="100%" fill="white"/>`
+    ];
+
+    geom.trees.forEach((tree) => {
+      tree.paths.forEach((p) => {
+        if (p.type === "circle") {
+          const stroke = p.stroke || "#3a3d5e";
+          const sw = p.sw || 1;
+          const fill = p.fill || "none";
+          const alpha = p.alpha ?? 1;
+          parts.push(
+            `<circle cx="${p.cx}" cy="${p.cy}" r="${p.r}" stroke="${stroke}" stroke-width="${sw}" fill="${fill}" opacity="${alpha}"/>`
+          );
+        } else if (p.d) {
+          const stroke = p.stroke || "#3a3d5e";
+          const sw = p.sw || 1;
+          const alpha = p.alpha ?? 1;
+          parts.push(
+            `<path d="${p.d}" stroke="${stroke}" stroke-width="${sw}" fill="none" opacity="${alpha}"/>`
+          );
+        } else if (typeof p.x1 === "number") {
+          const stroke = p.stroke || "#3a3d5e";
+          const sw = p.sw || 1;
+          const alpha = p.alpha ?? 1;
+          parts.push(
+            `<line x1="${p.x1}" y1="${p.y1}" x2="${p.x2}" y2="${p.y2}" stroke="${stroke}" stroke-width="${sw}" opacity="${alpha}"/>`
+          );
+        }
+      });
+    });
+
+    parts.push("</svg>");
+    return parts.join("");
+  }
+
   function wordCount(text) {
     return String(text || "").trim().split(/\s+/).filter(Boolean).length;
   }
@@ -1589,7 +1849,7 @@
     return enforceWordCount(sentences.join(" "), 350);
   }
 
-  function generateMarkdown() {
+  function generateMarkdown(opts = {}) {
     const d = new Date();
     const dateISO = d.toISOString().slice(0,10);
     const dateStr = d.toLocaleDateString(undefined, { weekday:"long", year:"numeric", month:"long", day:"numeric" });
@@ -1657,6 +1917,9 @@
     const proseKeywords = topNWords(proseText, 6).map(x => titleCase(x.w));
     const proseTags = formatProperNounTags(proseText);
 
+    const forestFile = opts.forestFile || `forest_${dateISO}${state.forest.hiResPng ? "_hires" : ""}.png`;
+    const graphFile = opts.graphFile || `concept_graph_${dateISO}.png`;
+
     const header = [
       `# Semester Dashboard — ${dateStr}`,
       ``,
@@ -1674,7 +1937,15 @@
       t.push(`- ${obsidianLink(course)} — status: **${c.status || "steady"}**`);
       if (c.focus) t.push(`  - Focus: ${c.focus}`);
       if (c.budget) t.push(`  - Block budget: ${c.budget}`);
-      if (c.notes) t.push(`  - Notes: ${c.notes}`);
+      const noteText = c.notes || "";
+      const analysis = buildNoteAnalysis(noteText);
+      const noteBullets = analysis.concepts.map(p => `    - ${p || "—"}`).join("\n");
+      const noteAnchors = analysis.anchors;
+      t.push(`  - Note title: ${analysis.title}`);
+      t.push(`  - Key concepts:`);
+      t.push(noteBullets || "    - —");
+      t.push(`  - Academic anchors: ${noteAnchors.join(" ") || "—"}`);
+      if (noteText) t.push(`  - Notes: ${noteText}`);
       return t.join("\n");
     }).join("\n");
 
@@ -1713,6 +1984,9 @@
       `- Modes checked: daily ${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="daily" && state.modeChecks[k]).length}/${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="daily").length || 1} • weekly ${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="weekly" && state.modeChecks[k]).length}/${Object.keys(state.modeChecks).filter(k => (state.modeScope?.[k]||"weekly")==="weekly").length || 1}`
     ].join("\n");
 
+    const forestEmbed = forestFile || "";
+    const graphEmbed = graphFile || "";
+
     const out = [
       header,
       ``,
@@ -1747,7 +2021,8 @@
       `- Avg syntax: ${avgSyntax.toFixed(2)} (max ${avgMaxSyntax.toFixed(2)})`,
       `- Avg cohesion: ${avgCohesion.toFixed(2)} (max ${avgMaxCohesion.toFixed(2)})`,
       `- Completion rate: ${percent(completionRate)}`,
-      `- Exported forest PNG: ${exportForestPngForMarkdown(dateISO, state.forest.hiResPng) || "N/A"}`
+      `- Forest PNG: ${forestEmbed ? `![[${forestEmbed}]]` : "N/A"}`,
+      `- Concept Graph PNG: ${graphEmbed ? `![[${graphEmbed}]]` : "N/A"}`
     ].join("\n");
 
     return out;
@@ -1804,6 +2079,58 @@
   // ---------- Forest visualization ----------
   let lastForestGeom = null;
 
+  function getWeeklyStore(weekId) {
+    state.forest.weekly = state.forest.weekly || { weekId: "", courses: {} };
+    if (state.forest.weekly.weekId !== weekId) {
+      state.forest.weekly = { weekId, courses: {} };
+    }
+    return state.forest.weekly;
+  }
+
+  function noteSessionScore(notes) {
+    const words = wordCount(notes);
+    if (words < 10) return 0;
+    const punctCount = (notes.match(/[.,;:!?]/g) || []).length;
+    const sentences = splitSentences(notes);
+    const syntax = words ? Math.min(1, (punctCount / words) * 8) : 0;
+    const cohesionHits = (notes.match(/\b(and|but|because|however|therefore|thus|so)\b/gi) || []).length;
+    const cohesion = sentences.length ? Math.min(1, cohesionHits / Math.max(1, sentences.length)) : 0;
+    const noteWords = contentWords(notes);
+    const uniqueRatio = noteWords.length ? (new Set(noteWords)).size / noteWords.length : 0;
+    const diversity = clamp(uniqueRatio, 0, 1);
+
+    const lengthTarget = 180;
+    const lengthFactor = clamp(Math.sqrt(words) / Math.sqrt(lengthTarget), 0, 1);
+    const complexity = clamp(0.4 * syntax + 0.4 * cohesion + 0.2 * diversity, 0, 1);
+    return clamp(0.35 * lengthFactor + 0.65 * complexity, 0, 1);
+  }
+
+  function updateWeeklySession(course, notes) {
+    const weekId = isoWeekId(new Date());
+    const store = getWeeklyStore(weekId);
+    const dayKey = etDateKey();
+    store.courses[course] = store.courses[course] || { days: {}, total: 0 };
+    const score = noteSessionScore(notes);
+    if (score <= 0) return;
+    const prev = store.courses[course].days[dayKey] || 0;
+    if (score > prev) {
+      store.courses[course].days[dayKey] = score;
+      const total = Object.values(store.courses[course].days).reduce((sum, v) => sum + v, 0);
+      store.courses[course].total = total;
+      saveState();
+    }
+  }
+
+  function weeklyScoreForCourse(course, weekId) {
+    const store = getWeeklyStore(weekId);
+    const c = store.courses[course];
+    if (!c) return { score: 0, sessions: 0 };
+    const scores = Object.values(c.days || {});
+    const sessions = scores.filter(s => s >= 0.2).length;
+    const score = clamp(scores.reduce((sum, s) => sum + s, 0) / 5, 0, 1);
+    return { score, sessions };
+  }
+
   function computeForestMetrics() {
     const courses = state.courses || [];
     const perCourse = {};
@@ -1812,8 +2139,11 @@
     courses.forEach((course) => {
       const notes = (state.courseNotes[course]?.notes || "");
       const words = wordCount(notes);
-      const syntax = Math.min(1, (notes.match(/[.,;:]/g) || []).length / 12);
-      const cohesion = Math.min(1, (notes.match(/\b(and|but|because|however|therefore|thus|so)\b/gi) || []).length / 6);
+      const punctCount = (notes.match(/[.,;:!?]/g) || []).length;
+      const sentences = splitSentences(notes);
+      const syntax = words ? Math.min(1, (punctCount / words) * 8) : 0;
+      const cohesionHits = (notes.match(/\b(and|but|because|however|therefore|thus|so)\b/gi) || []).length;
+      const cohesion = sentences.length ? Math.min(1, cohesionHits / Math.max(1, sentences.length)) : 0;
       const tasks = state.todayTasks.filter(t => t.course === course && t.done).length
         + state.weekendTasks.filter(t => t.course === course && t.done).length;
 
@@ -1841,6 +2171,296 @@
     return { perCourse, total, mode, weekId };
   }
 
+  function hashString(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function makeRng(seed) {
+    let s = hashString(String(seed)) || 1;
+    return () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return (s >>> 8) / 16777216;
+    };
+  }
+
+  function seededRandom(key, salt = "") {
+    const h = hashString(`${key}::${salt}`);
+    return (h % 100000) / 100000;
+  }
+
+  function courseCorpus(course) {
+    const c = state.courseNotes?.[course] || {};
+    const taskText = [
+      ...state.todayTasks.filter(t => t.course === course).map(t => t.title || ""),
+      ...state.weekendTasks.filter(t => t.course === course).map(t => t.title || "")
+    ].join(" ");
+    return [
+      course,
+      c.status || "",
+      c.focus || "",
+      c.budget || "",
+      c.notes || "",
+      taskText
+    ].join(" ");
+  }
+
+  function courseKeywords(course) {
+    const raw = courseCorpus(course);
+    const norm = normalizeText(raw);
+    const words = topNWords(norm, 8).map(x => x.w);
+    const phrases = keyPhrases(raw, 6).map(p => p.replace(/[^a-z0-9\s]/gi, "").trim()).filter(Boolean);
+    return new Set([...words, ...phrases].filter(Boolean));
+  }
+
+  function courseComplexity(metrics) {
+    const words = clamp((metrics.words || 0) / 220, 0, 1);
+    const syntax = clamp((metrics.syntax || 0) / 1.2, 0, 1);
+    const cohesion = clamp((metrics.cohesion || 0) / 1.2, 0, 1);
+    const tasks = clamp((metrics.tasks || 0) / 6, 0, 1);
+    return clamp(0.4 * words + 0.25 * syntax + 0.25 * cohesion + 0.1 * tasks, 0, 1);
+  }
+
+  function computeMyceliumGraph(courses, perCourse, baseY, w, h, weekId, simulateWeeklyScore = null) {
+    const spacing = w / (Math.max(1, courses.length) + 1);
+    const nodes = courses.map((course, idx) => {
+      const metrics = perCourse[course] || { words: 0, syntax: 0, cohesion: 0, tasks: 0 };
+      const complexity = courseComplexity(metrics);
+      const activity = clamp((metrics.words || 0) / 140 + (metrics.tasks || 0) / 6 + (metrics.syntax || 0), 0, 2);
+      const depth = 30 + 110 * (0.35 + 0.65 * complexity);
+      const x = spacing * (idx + 1);
+      const y = clamp(baseY + depth, baseY + 8, h - 10);
+      const weekly = weeklyScoreForCourse(course, weekId);
+      const noteText = state.courseNotes?.[course]?.notes || "";
+      const noteWords = contentWords(noteText);
+      const uniqueRatio = noteWords.length ? (new Set(noteWords)).size / noteWords.length : 0;
+      const diversityN = clamp(uniqueRatio, 0, 1);
+      const keywordCount = courseKeywords(course).size;
+      const phraseCount = keyPhrases(noteText, 8).length;
+      const cohesionHits = (noteText.match(/\b(and|but|because|however|therefore|thus|so)\b/gi) || []).length;
+      const sentences = splitSentences(noteText);
+      const cohesionN = sentences.length ? Math.min(1, cohesionHits / Math.max(1, sentences.length)) : 0;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+      return {
+        id: course,
+        course,
+        x,
+        y,
+        complexity,
+        activity,
+        keywords: courseKeywords(course),
+        jitter: seededRandom(course, weekId),
+        weeklyScore: (simulateWeeklyScore === null) ? weekly.score : simulateWeeklyScore,
+        conceptScore: conceptN,
+        diversityN
+      };
+    });
+
+    const edges = [];
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const aSet = a.keywords;
+        const bSet = b.keywords;
+        let shared = 0;
+        aSet.forEach((k) => { if (bSet.has(k)) shared += 1; });
+        const denom = Math.max(1, Math.min(aSet.size, bSet.size));
+        const similarity = shared / denom;
+        const avgComplexity = (a.complexity + b.complexity) / 2;
+        const activityBoost = clamp((a.activity + b.activity) / 3, 0, 1);
+        const weight = similarity * (0.55 + 0.45 * avgComplexity) + 0.08 * activityBoost;
+        if (shared >= 1 || weight >= 0.06) {
+          edges.push({
+            a,
+            b,
+            shared,
+            weight,
+            avgComplexity,
+            key: `${a.id}|${b.id}|${weekId}`
+          });
+        }
+      }
+    }
+    const weeklyByCourse = {};
+    const conceptByCourse = {};
+    nodes.forEach((n) => {
+      weeklyByCourse[n.course] = n.weeklyScore || 0;
+      conceptByCourse[n.course] = n.conceptScore || 0;
+    });
+    return { nodes, edges, weeklyByCourse, conceptByCourse };
+  }
+
+  function drawMycelium(ctx, graph, baseY, w, h) {
+    if (!graph || !graph.nodes.length) return;
+    const ink = "#000000";
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 0.5;
+    ctx.globalAlpha = 1;
+
+    // Space colonization mycelium
+    const nutrients = [];
+    graph.edges.forEach((edge, idx) => {
+      const { a, b, weight } = edge;
+      const count = Math.max(6, Math.round(8 + weight * 18));
+      for (let i = 0; i < count; i++) {
+        const t = (i + 1) / (count + 1);
+        const nx = a.x + (b.x - a.x) * t;
+        const ny = a.y + (b.y - a.y) * t;
+        const jx = (seededRandom(edge.key, `jx${i}`) - 0.5) * 24;
+        const jy = (seededRandom(edge.key, `jy${i}`) - 0.1) * 30;
+        nutrients.push({ x: nx + jx, y: Math.min(h - 6, Math.max(baseY + 8, ny + jy)) });
+      }
+    });
+    const maxNutrients = 1400;
+    if (nutrients.length > maxNutrients) nutrients.length = maxNutrients;
+    if (!nutrients.length) {
+      graph.nodes.forEach((node) => {
+        const count = 10;
+        for (let i = 0; i < count; i++) {
+          const t = (i + 1) / (count + 1);
+          const ang = (Math.PI * 2 * t);
+          const r = 22 + seededRandom(node.id, `n${i}`) * 26;
+          nutrients.push({
+            x: node.x + Math.cos(ang) * r,
+            y: Math.min(h - 6, baseY + 12 + Math.sin(ang) * r)
+          });
+        }
+      });
+    }
+
+    const tips = graph.nodes.map((node) => ({
+      x: node.x,
+      y: baseY + 2,
+      dirX: 0,
+      dirY: 1,
+      course: node.course
+    }));
+    // Debug: show nutrient points and tips if network appears empty
+    const debug = false;
+    if (debug) {
+      ctx.fillStyle = "#000000";
+      nutrients.forEach((n) => {
+        ctx.fillRect(n.x - 1, n.y - 1, 2, 2);
+      });
+      tips.forEach((t) => {
+        ctx.fillRect(t.x - 1, t.y - 1, 2, 2);
+      });
+    }
+
+    const weeklyAvg = graph.nodes.length
+      ? graph.nodes.reduce((sum, n) => sum + (n.weeklyScore || 0), 0) / graph.nodes.length
+      : 0;
+    const influence = 140 + 70 * weeklyAvg;
+    const kill = 1;
+    const step = 8;
+    const iterations = Math.min(160, Math.round(240 + 120 * weeklyAvg));
+    const maxTips = 1800;
+
+    // Contact with trunks
+    graph.nodes.forEach((node) => {
+      ctx.beginPath();
+      ctx.moveTo(node.x, baseY);
+      ctx.lineTo(node.x, baseY + 6);
+      ctx.stroke();
+    });
+
+    for (let iter = 0; iter < iterations && nutrients.length; iter++) {
+      const growth = new Array(tips.length).fill(0).map(() => ({ x: 0, y: 0, count: 0 }));
+
+      for (let n = nutrients.length - 1; n >= 0; n--) {
+        const nutrient = nutrients[n];
+        let bestIdx = -1;
+        let bestDist = Infinity;
+        for (let i = 0; i < tips.length; i++) {
+          const dx = nutrient.x - tips[i].x;
+          const dy = nutrient.y - tips[i].y;
+          const d = Math.hypot(dx, dy);
+          if (d < kill) {
+            nutrients.splice(n, 1);
+            bestIdx = -2;
+            break;
+          }
+          if (d < bestDist && d < influence) {
+            bestDist = d;
+            bestIdx = i;
+          }
+        }
+        if (bestIdx >= 0) {
+          const dx = nutrient.x - tips[bestIdx].x;
+          const dy = nutrient.y - tips[bestIdx].y;
+          const d = Math.hypot(dx, dy) || 1;
+          growth[bestIdx].x += dx / d;
+          growth[bestIdx].y += dy / d;
+          growth[bestIdx].count += 1;
+        }
+      }
+
+      const newTips = [];
+      for (let i = 0; i < tips.length; i++) {
+        const g = growth[i];
+        if (!g.count) {
+          if (iter % 2 === 0) {
+            const nx = tips[i].x;
+            const ny = tips[i].y + step * 0.6;
+            ctx.beginPath();
+            ctx.moveTo(tips[i].x, tips[i].y);
+            ctx.lineTo(nx, ny);
+            ctx.stroke();
+            newTips.push({ x: nx, y: ny, dirX: 0, dirY: 1 });
+          }
+          continue;
+        }
+        const dx = g.x / g.count;
+        const dy = g.y / g.count;
+        const d = Math.hypot(dx, dy) || 1;
+        const nx = tips[i].x + (dx / d) * step;
+        const ny = tips[i].y + (dy / d) * step;
+        ctx.beginPath();
+        ctx.moveTo(tips[i].x, tips[i].y);
+        ctx.lineTo(nx, ny);
+        ctx.stroke();
+        newTips.push({ x: nx, y: ny, dirX: dx / d, dirY: dy / d });
+      }
+      for (let i = 0; i < newTips.length; i++) {
+        tips.push(newTips[i]);
+        if (tips.length >= maxTips) break;
+      }
+      if (tips.length >= maxTips) break;
+    }
+
+    // Fuse nearby tips to create web-like connections
+    const fuseStride = tips.length > 1200 ? 2 : 1;
+    for (let i = 0; i < tips.length; i += fuseStride) {
+        const weeklyI = graph.weeklyByCourse?.[tips[i].course] || 0;
+        const linkMax = 46 + 28 * weeklyI + 24 * weeklyAvg;
+      for (let j = i + 1; j < tips.length; j += fuseStride) {
+        const weeklyJ = graph.weeklyByCourse?.[tips[j].course] || 0;
+        const conceptI = graph.conceptByCourse?.[tips[i].course] || 0;
+        const conceptJ = graph.conceptByCourse?.[tips[j].course] || 0;
+        const conceptAvg = (conceptI + conceptJ) / 2;
+        const maxDist = linkMax + 40 * conceptAvg;
+        const dx = tips[i].x - tips[j].x;
+        const dy = tips[i].y - tips[j].y;
+        const d = Math.hypot(dx, dy);
+        if (d > 4 && d < maxDist) {
+          ctx.beginPath();
+          ctx.moveTo(tips[i].x, tips[i].y);
+          ctx.lineTo(tips[j].x, tips[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
   function updateForestMax(perCourse) {
     const maxStore = state.forest.perCourseMax || {};
     Object.entries(perCourse).forEach(([course, metrics]) => {
@@ -1858,13 +2478,60 @@
   }
 
   function initCanvasHiDPI(canvas) {
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.floor(rect.width * dpr);
     canvas.height = Math.floor(rect.height * dpr);
     ctx.scale(dpr, dpr);
     return { ctx, w: rect.width, h: rect.height };
+  }
+
+  function renderForestLegend(perCourse, courseList) {
+    if (!forestLegendEl) return;
+    const weekId = isoWeekId(new Date());
+    const rows = courseList.map((course) => {
+      const m = perCourse[course] || {};
+      const notes = state.courseNotes?.[course]?.notes || "";
+      const words = wordCount(notes);
+      const punctCount = (notes.match(/[.,;:!?]/g) || []).length;
+      const sentences = splitSentences(notes);
+      const syntax = words ? Math.min(1, (punctCount / words) * 8) : 0;
+      const cohesionHits = (notes.match(/\b(and|but|because|however|therefore|thus|so)\b/gi) || []).length;
+      const cohesion = sentences.length ? Math.min(1, cohesionHits / Math.max(1, sentences.length)) : 0;
+      const avgSentenceLen = sentences.length ? (words / sentences.length) : 0;
+      const noteWords = contentWords(notes);
+      const uniqueRatio = noteWords.length ? (new Set(noteWords)).size / noteWords.length : 0;
+      const diversityN = clamp(uniqueRatio, 0, 1);
+      const keywordCount = courseKeywords(course).size;
+      const phraseCount = keyPhrases(notes, 8).length;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesion) / 3, 0, 1);
+      const properCount = extractProperNouns(notes, 50).length;
+      const punctuationPerWord = words ? (punctCount / words) : 0;
+      const stress = m.stress || 0;
+      const tasks = m.tasks || 0;
+      const weekly = weeklyScoreForCourse(course, weekId);
+      const status = (state.courseNotes?.[course]?.status || "steady");
+      return `
+        <div style="display:grid;gap:4px;padding:8px;border:1px solid #e6e6e6;border-radius:10px;background:#ffffff;">
+          <div><b>${escapeHtml(course)}</b> <span class="pill">${status}</span></div>
+          <div>Words ${words} • SentLen ${avgSentenceLen.toFixed(1)} • Punct ${(punctuationPerWord * 100).toFixed(1)}%</div>
+          <div>Syntax ${(syntax * 100).toFixed(1)}% • Cohesion ${(cohesion * 100).toFixed(1)}% • Diversity ${(diversityN * 100).toFixed(1)}%</div>
+          <div>Concepts ${keywordCount} • Phrases ${phraseCount} • Proper ${properCount}</div>
+          <div>Tasks ${tasks} • Stress ${(stress * 100).toFixed(1)}% • Linkage ${(conceptN * 100).toFixed(1)}%</div>
+          <div>Weekly sessions ${weekly.sessions} • Days ${weekly.sessions}/6 • Weekly score ${(weekly.score * 100).toFixed(1)}%</div>
+        </div>
+      `;
+    }).join("");
+
+    forestLegendEl.innerHTML = `
+      <div style="display:grid;gap:8px;">
+        <div><b>Tree Analysis Legend</b> — per-course signals driving structure</div>
+        <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
+          ${rows || "<div>No courses yet.</div>"}
+        </div>
+      </div>
+    `;
   }
 
   function renderForest() {
@@ -1874,13 +2541,14 @@
 
     const { ctx, w, h } = initCanvasHiDPI(forestCanvas);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, w, h);
 
     const courses = state.courses || [];
+    renderForestLegend(perCourse, courses);
     const count = Math.max(1, courses.length);
     const spacing = w / (count + 1);
-    const baseY = h - 48;
+    const baseY = h - 200;
     const padL = 18;
     const padR = 18;
     const padT = 18;
@@ -1890,24 +2558,66 @@
     // ghost overlay
     drawGhostForest(ctx, w, h, padL, padR, baseY);
 
+    const simulateWeekly = true;
+    const simulateWeeklyScore = 1.0;
+    const weekendStats = {};
+    const courseMap = new Map(state.courses.map(c => [String(c).trim().toLowerCase(), c]));
+    state.weekendTasks.forEach((t) => {
+      const raw = String(t.course || "Unassigned");
+      const key = raw.trim().toLowerCase();
+      const c = courseMap.get(key) || raw.trim() || "Unassigned";
+      if (!weekendStats[c]) weekendStats[c] = { total: 0, done: 0 };
+      weekendStats[c].total += 1;
+      if (t.done) weekendStats[c].done += 1;
+    });
+
     courses.forEach((course, idx) => {
       const x0 = spacing * (idx + 1);
       const metrics = perCourse[course] || { words: 0, syntax: 0, cohesion: 0, tasks: 0, stress: 0 };
-      const max = state.forest.perCourseMax?.[course] || { words: 1, syntax: 1, cohesion: 1, tasks: 1 };
+      const currentMax = {
+        words: Math.max(1, ...Object.values(perCourse).map(m => m.words || 0)),
+        syntax: Math.max(0.1, ...Object.values(perCourse).map(m => m.syntax || 0)),
+        cohesion: Math.max(0.1, ...Object.values(perCourse).map(m => m.cohesion || 0)),
+        tasks: Math.max(1, ...Object.values(perCourse).map(m => m.tasks || 0))
+      };
 
       // Normalized values
-      const wordsN = clamp((metrics.words || 0) / Math.max(1, max.words || 1), 0, 1);
-      const syntaxN = clamp((metrics.syntax || 0) / Math.max(0.1, max.syntax || 1), 0, 1);
-      const cohesionN = clamp((metrics.cohesion || 0) / Math.max(0.1, max.cohesion || 1), 0, 1);
-      const tasksN = clamp((metrics.tasks || 0) / Math.max(1, max.tasks || 1), 0, 1);
+      const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
+      const syntaxN = clamp((metrics.syntax || 0) / currentMax.syntax, 0, 1);
+      const cohesionN = clamp((metrics.cohesion || 0) / currentMax.cohesion, 0, 1);
+      const tasksN = clamp((metrics.tasks || 0) / currentMax.tasks, 0, 1);
 
       const stress = clamp(metrics.stress || 0, 0, 1);
-      const height = 100 + 230 * (0.4 * wordsN + 0.6 * tasksN);
-      const trunkW = 5 + 11 * (0.2 + syntaxN);
+      const noteText = state.courseNotes?.[course]?.notes || "";
+      const noteWords = contentWords(noteText);
+      const uniqueRatio = noteWords.length ? (new Set(noteWords)).size / noteWords.length : 0;
+      const diversityN = clamp(uniqueRatio, 0, 1);
+      const keywordCount = courseKeywords(course).size;
+      const phraseCount = keyPhrases(noteText, 8).length;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+      const weekly = weeklyScoreForCourse(course, weekId);
+      const weeklyScoreN = simulateWeekly ? simulateWeeklyScore : weekly.score;
+      const isGcas = /gcas/i.test(course);
+      const heightScale = isGcas ? 1 : 0.7;
+      const canopyBoost = isGcas ? 1 : 1.2;
+      const gcasBoost = 1;
+      const allTasks = state.todayTasks.concat(state.weekendTasks).filter(t => t.course === course);
+      const totalTasks = allTasks.length;
+      const doneTasks = allTasks.filter(t => t.done).length;
+      const taskScoreN = totalTasks ? clamp(doneTasks / totalTasks, 0, 1) : 0;
+      const maxHeight = Math.max(40, baseY - padT - 70);
+      const height = Math.min(
+        maxHeight * 0.6 * heightScale,
+        (12 + 40 * weeklyScoreN + 16 * (wordsN * weeklyScoreN) + 10 * (tasksN * weeklyScoreN)) * heightScale
+      );
+      const trunkW = 0.5;
 
-      const branchiness = clamp(0.25 + 0.9 * syntaxN, 0.1, 1);
-      const leaves = clamp(0.2 + 0.9 * cohesionN + 0.4 * mode.weeklyRatio, 0.15, 1.2);
-      const crownSpread = clamp(0.6 + 1.4 * cohesionN, 0.6, 2.2);
+      const complexityN = clamp((wordsN + syntaxN + cohesionN + tasksN + weeklyScoreN) / 5, 0, 1);
+      const branchiness = clamp(0.3 + 0.7 * syntaxN * weeklyScoreN * gcasBoost + 0.25 * tasksN * weeklyScoreN, 0.2, 1.6);
+      const leaves = taskScoreN > 0
+        ? clamp(0.4 + 1.6 * taskScoreN * canopyBoost + 0.9 * cohesionN * weeklyScoreN * gcasBoost + 0.4 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2)
+        : 0;
+      const crownSpread = clamp(1.0 + 1.6 * taskScoreN * canopyBoost + 0.6 * syntaxN * gcasBoost, 1.0, 4.0);
 
       const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
 
@@ -1921,25 +2631,89 @@
         crownSpread,
         stress,
         padT,
+        padL,
+        padR,
+        w,
+        dayLight,
+        cohesionN,
+        syntaxN,
+        tasksN,
+        diversityN,
+        wordsN,
+        conceptN,
+        weeklyScoreN,
+        weekendScoreN: taskScoreN,
+        noteText,
+        syntax: metrics.syntax || 0,
+        cohesion: metrics.cohesion || 0,
+        complexityN,
+        seedKey: `${weekId}|${course}|${metrics.words}|${metrics.tasks}|${metrics.syntax}|${metrics.cohesion}|${weeklyScoreN}`,
         course,
         mode
       }, lastForestGeom);
     });
 
+    // mycelium network (rendered on top for visibility)
+    const mycelium = computeMyceliumGraph(courses, perCourse, baseY, w, h, weekId, simulateWeeklyScore);
+    drawMycelium(ctx, mycelium, baseY, w, h);
+
+    applyOrderedDither(ctx, w, h);
+
     // save snapshot for this week so it becomes next week's ghost
     saveGhostSnapshot(weekId);
   }
 
+  let ditherWarned = false;
+  function applyOrderedDither(ctx, w, h) {
+    try {
+      const iw = Math.max(1, Math.floor(w));
+      const ih = Math.max(1, Math.floor(h));
+      const img = ctx.getImageData(0, 0, iw, ih);
+      const data = img.data;
+      const bayer8 = [
+        [0, 32, 8, 40, 2, 34, 10, 42],
+        [48, 16, 56, 24, 50, 18, 58, 26],
+        [12, 44, 4, 36, 14, 46, 6, 38],
+        [60, 28, 52, 20, 62, 30, 54, 22],
+        [3, 35, 11, 43, 1, 33, 9, 41],
+        [51, 19, 59, 27, 49, 17, 57, 25],
+        [15, 47, 7, 39, 13, 45, 5, 37],
+        [63, 31, 55, 23, 61, 29, 53, 21]
+      ];
+      const strength = 120;
+      const levels = 2;
+      for (let y = 0; y < ih; y++) {
+        for (let x = 0; x < iw; x++) {
+          const i = (y * iw + x) * 4;
+          const threshold = (bayer8[y % 8][x % 8] / 64) - 0.5;
+          const r = clamp(data[i] + threshold * strength, 0, 255);
+          const g = clamp(data[i + 1] + threshold * strength, 0, 255);
+          const b = clamp(data[i + 2] + threshold * strength, 0, 255);
+          data[i] = Math.round((r / 255) * levels) * (255 / levels);
+          data[i + 1] = Math.round((g / 255) * levels) * (255 / levels);
+          data[i + 2] = Math.round((b / 255) * levels) * (255 / levels);
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    } catch (err) {
+      if (!ditherWarned) {
+        console.warn("Dither disabled (canvas not readable).", err);
+        ditherWarned = true;
+      }
+    }
+  }
+
   function drawGhostForest(ctx, w, h, padL, padR, baseY) {
+    if (isMondayAfterNoonET()) return;
     const current = isoWeekId(new Date());
     const prev = prevIsoWeekId(current);
     const ghost = loadGhostSnapshot(prev);
     if (!ghost) return;
 
     ctx.save();
-    ctx.globalAlpha = 0.18;
-    ctx.strokeStyle = "rgba(58,61,94,0.35)";
-    ctx.lineWidth = 1;
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 0.5;
 
     ghost.trees.forEach((tree) => {
       tree.paths.forEach((p) => {
@@ -1947,10 +2721,14 @@
           ctx.beginPath();
           ctx.arc(p.cx, p.cy, p.r, 0, Math.PI * 2);
           ctx.stroke();
+        } else if (p.d) {
+          ctx.beginPath();
+          const path = new Path2D(p.d);
+          ctx.stroke(path);
         } else {
           ctx.beginPath();
-          ctx.strokeStyle = "rgba(58,61,94,0.35)";
-          ctx.lineWidth = p.sw || 1;
+          ctx.strokeStyle = "#000000";
+          ctx.lineWidth = 0.5;
           ctx.moveTo(p.x1, p.y1);
           ctx.lineTo(p.x2, p.y2);
           ctx.stroke();
@@ -1989,13 +2767,151 @@
     try { localStorage.removeItem(`${STORAGE_KEY}_ghost_${weekId}`); } catch {}
   }
 
-  function drawTree(ctx, opts, forestGeom) {
-    const { x0, baseY, height, trunkW, branchiness, leaves, crownSpread, stress, padT, course, mode } = opts;
+  function buildLSystemParams(features, height, maxRise, signature) {
+    const syntaxN = features.syntaxN || 0;
+    const cohesionN = features.cohesionN || 0;
+    const tasksN = features.tasksN || 0;
+    const diversityN = features.diversityN || 0;
+    const wordsN = features.wordsN || 0;
+    const conceptN = features.conceptN || 0;
 
-    const ink = getCSSVar("--ink") || "#3a3d5e";
+    const sigHash = hashString(String(signature || ""));
+    const isGcas = /gcas/i.test(signature || "");
+    const sigJitter = ((sigHash % 23) - 11) * 0.7 + (isGcas ? -1.2 : 0);
+    const angleDeg = clamp(
+      24 + 28 * (1 - cohesionN) + 12 * diversityN + sigJitter,
+      20,
+      60
+    );
+    const iterations = 18;
+    let step = clamp(8 + height * (0.05 + 0.03 * cohesionN), 6, 16);
+    step += 10;
+    const stepScale = 0.85 + ((sigHash % 31) / 100) + (isGcas ? 0.06 : 0); // deterministic per-course variation
+    step *= stepScale;
+    if (maxRise) {
+      const stepCap = Math.max(3, maxRise / (iterations * 2.8));
+      step = Math.min(step, stepCap);
+    }
+
+    const grammarSet = [
+      { "F": "F[+F]F[-F]F" },
+      { "F": "FF[-F]F[+F]" },
+      { "F": "F[+F]F" },
+      { "F": "F[-F]F[+F]FF" },
+      { "F": "F[+F]F[+F]F" },
+      { "F": "F[-F]FF" },
+      { "F": "FF[+F]F[-F]" },
+      { "F": "F[+F][-F]F" },
+      { "F": "F[+F]F[+F][-F]F" },
+      { "F": "F[+F]FF[-F]F" },
+      { "F": "F[+F]F[+F]FF[-F]F" },
+      { "F": "FF[+F][-F]FF" }
+    ];
+    const key = [
+      Math.round(syntaxN * 10),
+      Math.round(cohesionN * 10),
+      Math.round(diversityN * 10),
+      Math.round(tasksN * 10),
+      Math.round(wordsN * 10),
+      sigHash
+    ].join("|");
+    const rules = grammarSet[hashString(key) % grammarSet.length];
+
+    return {
+      axiom: "F",
+      rules,
+      iterations,
+      angle: angleDeg * (Math.PI / 180),
+      step,
+      sigHash
+    };
+  }
+
+  function expandLSystem(axiom, rules, iterations, maxLen = 9000, maxRun = 2200) {
+    let str = axiom;
+    for (let i = 0; i < iterations; i++) {
+      let next = "";
+      for (let j = 0; j < str.length; j++) {
+        const ch = str[j];
+        next += rules[ch] || ch;
+        if (next.length > maxLen) break;
+      }
+      str = next.slice(0, maxLen);
+    }
+    return str.slice(0, maxRun);
+  }
+
+  function drawLSystem(ctx, start, angle, spec, leafPoints, ink, geom, minY, runScale = 1) {
+    const stack = [];
+    let x = start.x;
+    let y = start.y;
+    let dir = angle;
+    const step = spec.step;
+    const maxRun = Math.max(200, Math.round(5000 * clamp(runScale, 0.1, 1)));
+    const seq = expandLSystem(spec.axiom, spec.rules, spec.iterations, 20000, maxRun);
+    ctx.save();
+    ctx.strokeStyle = ink;
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < seq.length; i++) {
+      const ch = seq[i];
+      if (ch === "F") {
+        if (typeof minY === "number" && y < minY + 12) {
+          dir += 0.25;
+        }
+        let nx = x + Math.cos(dir) * step;
+        let ny = y + Math.sin(dir) * step;
+        if (typeof minY === "number" && ny < minY) {
+          dir = Math.PI / 2;
+          nx = x + Math.cos(dir) * step;
+          ny = y + Math.sin(dir) * step;
+        }
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(nx, ny);
+        ctx.stroke();
+        if (geom) {
+          geom.paths.push({
+            x1: x, y1: y, x2: nx, y2: ny,
+            stroke: ink,
+            sw: 0.5,
+            alpha: 1
+          });
+        }
+        x = nx; y = ny;
+        const phase = (i % 16);
+        const sign = ((Math.floor(i / 16) + (spec.sigHash % 7)) % 2 === 0) ? 1 : -1;
+        const drift = (phase < 6) ? -spec.angle * 0.12 : spec.angle * 0.16;
+        dir += drift * sign;
+      } else if (ch === "+") {
+        dir += spec.angle;
+      } else if (ch === "-") {
+        dir -= spec.angle;
+      } else if (ch === "[") {
+        stack.push({ x, y, dir });
+      } else if (ch === "]") {
+        if (stack.length) {
+          const s = stack.pop();
+          x = s.x; y = s.y; dir = s.dir;
+          leafPoints.push({ x, y });
+        }
+      }
+    }
+    leafPoints.push({ x, y });
+    ctx.restore();
+  }
+
+  function drawTree(ctx, opts, forestGeom) {
+    const {
+      x0, baseY, height, trunkW, branchiness, leaves, crownSpread,
+      stress, padT, padL, padR, w, dayLight, cohesionN, syntaxN, tasksN, diversityN, wordsN, conceptN, weeklyScoreN, weekendScoreN, noteText, syntax, cohesion,
+      complexityN,
+      seedKey, course, mode
+    } = opts;
+
+    const ink = "#000000";
     const curvature = clamp(0.3 + 0.6 * (1 - stress), 0.2, 0.9);
 
-    const r = () => Math.random();
 
     const geom = {
       course,
@@ -2003,24 +2919,43 @@
     };
     forestGeom.trees.push(geom);
 
-    const mature = leaves > 0.85;
+    const mature = leaves > 0.85 || (complexityN || 0) > 0.6;
     const hue = stress > 0.7 ? 350 : 215;
     const tint = stress > 0.7 ? 0.8 : 0.55;
-    ctx.save();
-    ctx.fillStyle = `rgba(255,255,255,${0.4 + 0.2 * (1 - stress)})`;
-    ctx.fillRect(x0 - 40, baseY - height - 40, 80, height + 60);
-    ctx.restore();
+    // No per-tree background fill to keep mycelium visible underneath
 
     const shadow = mature ? 1.15 : 0.7;
 
       // Draw trunk
       ctx.save();
       ctx.strokeStyle = ink;
-      ctx.globalAlpha = 0.33 + 0.22*stress;
-      ctx.lineWidth = trunkW;
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 0.5;
       ctx.setLineDash([]);
 
-      const trunkTop = { x: x0 + (r()-0.5)*2, y: baseY - height*dayLight };
+      const leafPoints = [];
+      const maxRise = Math.min(220, Math.max(60, baseY - padT - 20));
+      const lsys = buildLSystemParams({
+        syntaxN,
+        cohesionN,
+        tasksN,
+        stressN: stress,
+        diversityN,
+        wordsN
+      }, height, maxRise, `${course}|${noteText}|${tasksN}|${conceptN}`);
+      const growthN = clamp(weeklyScoreN, 0, 1);
+      const runScale = 0.1 + 0.9 * growthN;
+      const fitScale = clamp((baseY - padT - 20) / Math.max(1, height * 1.6), 0.4, 1);
+      lsys.step *= runScale * fitScale;
+      const heightScale = clamp(1 - (lsys.iterations - 2) * 0.12, 0.55, 1);
+      const trunkLen = height * dayLight * heightScale;
+      const angleBias = 0.28 + 0.45 * (1 - weeklyScoreN);
+      const angleSign = (tasksN - 0.5) >= 0 ? 1 : -1;
+      const trunkAngle = -Math.PI / 2 + angleSign * angleBias;
+      const trunkTop = {
+        x: x0 + Math.cos(trunkAngle) * trunkLen,
+        y: baseY + Math.sin(trunkAngle) * trunkLen
+      };
       trunkTop.y = Math.max(trunkTop.y, padT + 8);
 
       ctx.beginPath();
@@ -2036,92 +2971,71 @@
         alpha: (0.33 + 0.22*stress),
         fill: "none"
       });
-
-      // Branch recursion
-      const maxDepth = Math.round(3 + 6*branchiness);
-      const baseAngle = -Math.PI/2;
-
-      const leafPoints = [];
-      function branch(x,y, len, ang, depth){
-        if (depth <= 0 || len < 6) { leafPoints.push({x,y}); return; }
-        const nx = x + Math.cos(ang) * len;
-        const ny = y + Math.sin(ang) * len;
-
-        const sw = Math.max(0.6, (trunkW * 0.72) * (depth/(maxDepth+1)));
-        const alpha = 0.12 + 0.18 * (depth/(maxDepth+1));
-
-        ctx.save();
-        ctx.strokeStyle = ink;
-        ctx.globalAlpha = alpha;
-        ctx.lineWidth = sw;
-        ctx.beginPath();
-        ctx.moveTo(x,y);
-        const cx = x + Math.cos(ang) * len * 0.55 + (r()-0.5) * 6 * curvature;
-        const cy = y + Math.sin(ang) * len * 0.55 + (r()-0.5) * 6 * curvature;
-        ctx.quadraticCurveTo(cx, cy, nx, ny);
-        ctx.stroke();
-        ctx.restore();
-
-        geom.paths.push({
-          d: `M ${x} ${y} Q ${cx} ${cy} ${nx} ${ny}`,
-          stroke: ink,
-          sw,
-          alpha,
-          fill: "none"
-        });
-
-        const split = (r() < (0.55 + 0.35*branchiness)) ? 2 : 1;
-        const jitter = (r()-0.5) * 0.18;
-        const spread = (0.35 + 0.85*branchiness) * crownSpread;
-
-        if (split === 1){
-          const a2 = ang + jitter + (r()-0.5)*0.08;
-          branch(nx, ny, len*(0.70 + 0.10*r()), a2, depth-1);
-        } else {
-          const aL = ang - (0.22 + 0.28*r())*spread + jitter;
-          const aR = ang + (0.22 + 0.28*r())*spread + jitter;
-          branch(nx, ny, len*(0.66 + 0.10*r()), aL, depth-1);
-          branch(nx, ny, len*(0.66 + 0.10*r()), aR, depth-1);
-          if (mature && r() < 0.30) {
-            const aM = ang + (r()-0.5)*0.35*spread;
-            branch(nx, ny, len*(0.55 + 0.08*r()), aM, depth-2);
-          }
-        }
+      const lean = clamp((tasksN - 0.5) * 0.12 + (stress - 0.5) * 0.08 + (syntaxN - 0.5) * 0.05, -0.18, 0.18);
+      if (growthN > 0.05) {
+        drawLSystem(ctx, trunkTop, -Math.PI / 2 + lean, lsys, leafPoints, ink, geom, padT + 8, runScale * fitScale);
       }
 
-      const startLen = clamp(18 + height * (0.18 + 0.06*r()), 18, 74);
-      branch(trunkTop.x, trunkTop.y, startLen, baseAngle + (r()-0.5)*0.16, maxDepth);
-
       // Leaves
-      const leafCount = Math.min(140, Math.round(leaves * (6 + 10*cohesionN) * (0.92 + 0.18*mode.dailyRatio)));
-      const autumnPalette = ["#7a1f1f", "#9b2c2c", "#b45309", "#d97706", "#f59e0b", "#facc15", "#eab308", "#c2410c"];
-      const richness = clamp((syntax + cohesion) / 6, 0, 1);
-      const paletteCount = Math.max(1, Math.round(1 + richness * (autumnPalette.length - 1)));
+      const leafCount = leaves > 0 ? Math.min(
+        1400,
+        Math.round(leaves * (26 + 32 * cohesionN + 26 * (complexityN || 0) + 32 * (weekendScoreN || 0)) * (1.0 + 0.35 * mode.dailyRatio))
+      ) : 0;
+      const autumnPalette = [
+        "#3a2c1b", "#5a3a1c", "#7a3d1a", "#9b4a1f",
+        "#b8572a", "#d26a3a", "#e07f3f", "#f29c38",
+        "#c6423a", "#a8332b", "#7f2b2b", "#612727",
+        "#8d6a3c", "#a07c43"
+      ];
+      const richness = clamp((syntax + cohesion) / 6 + (complexityN || 0) * 0.35, 0, 1);
+      const paletteCount = Math.max(3, Math.round(3 + richness * (autumnPalette.length - 5)));
       const palette = autumnPalette.slice(0, paletteCount);
       if (leafCount > 0 && leafPoints.length) {
         ctx.save();
         ctx.strokeStyle = ink;
         ctx.fillStyle = palette[0];
-        ctx.globalAlpha = 0.9;
+        ctx.globalAlpha = 1;
 
-        const clusters = Math.max(1, Math.round(4 - 3*cohesionN));
-        const centers = [];
-        for (let c=0;c<clusters;c++){
-          centers.push(leafPoints[Math.floor(r()*leafPoints.length)]);
-        }
-
+        const points = (leafPoints.length ? leafPoints : [
+          { x: trunkTop.x, y: trunkTop.y },
+          { x: x0, y: baseY - (height * 0.3) },
+          { x: x0, y: baseY - (height * 0.6) }
+        ]).slice().sort((a, b) => a.y - b.y);
+        const topCount = Math.max(6, Math.round(points.length * 0.65));
+        const upperPoints = points.slice(0, topCount);
+        const lowerPoints = points.slice(topCount);
+        const dropCount = Math.round(leafCount * 0.2);
         for (let k=0;k<leafCount;k++){
-          const center = centers[Math.floor(r()*centers.length)];
-          const spreadPx = 10 + 40*(1 - cohesionN);
-          const px = center.x + (r()-0.5)*spreadPx;
-          const py = center.y + (r()-0.5)*spreadPx;
+          let px = 0;
+          let py = 0;
+          if (k < dropCount) {
+            const pick = points[k % points.length] || trunkTop;
+            const fall = (k / Math.max(1, dropCount)) * (40 + 80 * (1 - cohesionN));
+            px = pick.x + ((k % 7) - 3) * 2;
+            py = pick.y + fall;
+          } else {
+            const pick = (k % 3 === 0) ? points[k % points.length]
+              : (k % 7 === 0 && lowerPoints.length ? lowerPoints[k % lowerPoints.length]
+                : upperPoints[k % upperPoints.length]);
+            const spread = 30 + 60 * (1 - cohesionN);
+            const t = (k * 0.6180339887) % 1;
+            const theta = t * Math.PI * 2;
+            px = pick.x + Math.cos(theta) * spread * (0.35 + 0.65 * t);
+            py = Math.max(padT + 6, pick.y + Math.sin(theta) * spread * (0.35 + 0.65 * t));
+          }
 
-          const rad = 1.2 + 1.8*r();
-          ctx.fillStyle = palette[Math.floor(r() * palette.length)];
+          const rad = 1.1 + 1.4 * ((k % 11) / 10);
+          const stretch = 1.2 + 0.9 * ((k % 7) / 6);
+          const angle = (k % 9) * (Math.PI / 8);
+          ctx.fillStyle = palette[k % palette.length];
+          ctx.save();
+          ctx.translate(px, py);
+          ctx.rotate(angle);
           ctx.beginPath();
-          ctx.arc(px, py, rad, 0, Math.PI*2);
+          ctx.ellipse(0, 0, rad * stretch, rad, 0, 0, Math.PI * 2);
           ctx.fill();
-          if (r() < 0.35) { ctx.globalAlpha = 0.20; ctx.stroke(); ctx.globalAlpha = 0.9; }
+          if ((k % 5) === 0) { ctx.globalAlpha = 1; ctx.stroke(); }
+          ctx.restore();
 
           geom.paths.push({
             type: "circle",
@@ -2138,19 +3052,15 @@
       // Course labels (vertical along trunk)
       ctx.save();
       ctx.fillStyle = ink;
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = 1;
       ctx.font = "11px " + getCSSVar("--sans");
-      const labelX = clamp(x0, padL, w - padR);
+      const labelX = clamp(x0 - 12, padL, w - padR);
       ctx.translate(labelX, baseY - 10);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "center";
       ctx.fillText(course, 0, 0);
       ctx.restore();
     }
-
-    // save snapshot for this week so it becomes next week's ghost
-    saveGhostSnapshot(weekId);
-  
 
   // Debounced forest updates while typing
   const debouncedForest = debounce(() => {
@@ -2190,6 +3100,7 @@
     proseProjectEl.value = state.proseProject || "";
     proseTargetsEl.value = state.proseTargets || "";
     proseNotesEl.value = state.proseNotes || "";
+    if (graphSpacingEl) graphSpacingEl.value = String(graphSpacing);
 
     downtimeRuleEl.value = state.downtimeRule || "";
 
@@ -2254,6 +3165,21 @@
   proseNotesEl.addEventListener("input", () => { state.proseNotes = proseNotesEl.value; saveState(); debouncedGraph(); });
 
   downtimeRuleEl.addEventListener("input", () => { state.downtimeRule = downtimeRuleEl.value; saveState(); });
+
+  // Mode editor
+  el("btnAddMode").addEventListener("click", () => {
+    const label = String(newModeLabelEl.value || "").trim();
+    if (!label) { toast("Mode label is empty"); return; }
+    if (state.modeChecks[label]) { toast("Mode already exists"); return; }
+    const scope = newModeScopeEl.value === "daily" ? "daily" : "weekly";
+    state.modeChecks[label] = false;
+    state.modeScope[label] = scope;
+    newModeLabelEl.value = "";
+    saveState();
+    renderModeChips();
+    renderWeekSummary();
+    debouncedForest();
+  });
 
   // ---------- Buttons ----------
 
@@ -2358,28 +3284,42 @@
     el("btnDownloadMd").addEventListener("click", () => {
       const md = state.mdCache || generateMarkdown();
       setMdPreview(md);
-      const dateISO = new Date().toISOString().slice(0,10);
-      downloadText(`semester-dashboard_${dateISO}.md`, md, "text/markdown");
+      downloadText("download.md", md, "text/markdown");
       toast("Downloaded .md");
+    });
+
+    el("btnClearMd").addEventListener("click", () => {
+      state.mdCache = "";
+      saveState();
+      mdPreviewEl.textContent = "(Generate markdown to preview here.)";
+      toast("Cleared markdown");
     });
 
     el("btnArchiveBundle").addEventListener("click", async () => {
       try {
-        const md = state.mdCache || generateMarkdown();
+        const forestName = "forest.jpg";
+        const graphName = "concept_graph.jpg";
+        const forestUrl = forestPngDataUrl(state.forest.hiResPng ? 2 : 1, "image/jpeg", 0.92);
+        const graphUrl = conceptGraphPngDataUrl(1, "image/jpeg", 0.92);
+        const md = generateMarkdown({
+          forestFile: forestUrl ? forestName : "",
+          graphFile: graphUrl ? graphName : ""
+        });
         setMdPreview(md);
-        const dateISO = new Date().toISOString().slice(0,10);
-        const forestName = `forest_${dateISO}${state.forest.hiResPng ? "_hires" : ""}.png`;
-        const forestUrl = forestPngDataUrl(state.forest.hiResPng ? 2 : 1);
         const mdBytes = textToUint8(md);
-        const pngBytes = dataUrlToUint8(forestUrl);
-        const zip = zipFiles([
-          { name: `semester-dashboard_${dateISO}.md`, data: mdBytes },
-          { name: forestName, data: pngBytes }
-        ]);
+        const files = [{ name: "download.md", data: mdBytes }];
+        if (forestUrl) files.push({ name: forestName, data: dataUrlToUint8(forestUrl) });
+        if (graphUrl) files.push({ name: graphName, data: dataUrlToUint8(graphUrl) });
+        const zip = zipFiles(files);
         const blob = new Blob([zip], { type: "application/zip" });
-        downloadBlob(`semester-dashboard_${dateISO}.zip`, blob);
-        toast("Downloaded archive bundle");
-      } catch {
+        downloadBlob("download.zip", blob);
+        const missing = [
+          !forestUrl ? "forest" : "",
+          !graphUrl ? "graph" : ""
+        ].filter(Boolean);
+        toast(missing.length ? `Downloaded bundle (missing ${missing.join(", ")})` : "Downloaded archive bundle");
+      } catch (err) {
+        console.warn("Archive bundle failed.", err);
         toast("Archive bundle failed");
       }
     });
@@ -2398,13 +3338,30 @@
 
     el("btnResetWeek").addEventListener("click", () => {
       for (const k of Object.keys(state.modeChecks)) {
-        if ((state.modeScope?.[k] || "weekly") === "weekly") state.modeChecks[k] = false;
+        state.modeChecks[k] = false;
       }
+      state.todayTasks = [];
+      state.weekendTasks = [];
+      state.todayNotes = "";
+      state.writingNotes = "";
+      state.writingThread = "";
+      state.writingTargets = "";
+      state.proseNotes = "";
+      state.proseProject = "";
+      state.proseTargets = "";
+      Object.keys(state.courseNotes || {}).forEach((course) => {
+        state.courseNotes[course].notes = "";
+      });
+      state.forest.perCourseMax = {};
+      state.forest.weekId = isoWeekId(new Date());
+      state.forest.weekly = { weekId: state.forest.weekId, courses: {} };
       saveState();
       renderModeChips();
+      renderTasks();
+      renderCourseCards();
       renderWeekSummary();
       debouncedForest();
-      toast("Reset weekly modes");
+      toast("Reset week");
     });
 
     // Backup / reset
