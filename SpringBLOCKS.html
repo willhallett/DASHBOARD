@@ -475,6 +475,43 @@
     .apiKeyInput {
       min-width: 220px;
     }
+
+    .focus-indicator {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 80;
+      display: none;
+      gap: 8px;
+      align-items: center;
+      background: var(--panel2);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--text);
+      box-shadow: var(--shadowSoft);
+    }
+    .focus-indicator button {
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .scale-debug {
+      position: fixed;
+      top: 52px;
+      left: 12px;
+      z-index: 80;
+      display: none;
+      background: var(--panel2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--text);
+      box-shadow: var(--shadowSoft);
+      line-height: 1.4;
+      max-width: 240px;
+    }
   </style>
 </head>
 
@@ -513,6 +550,11 @@
     </div>
   </div>
 </header>
+<div id="focusIndicator" class="focus-indicator">
+  <span id="focusLabel">Focus</span>
+  <button class="btn-secondary" id="focusBack">Back</button>
+</div>
+<div id="scaleDebug" class="scale-debug"></div>
 
 <main class="wrap">
   <!-- Week Summary FULL WIDTH -->
@@ -787,6 +829,7 @@
 <script>
   // ---------- Version + migration ----------
   const STORAGE_KEY = "semester_dashboard_v1";
+  const USER_SEED_SALT_KEY = `${STORAGE_KEY}_seed_salt`;
   const CURRENT_VERSION = 11; // add forest simulation toggle
 
   const DEFAULT = {
@@ -942,6 +985,15 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
+  let saveStateTimer = null;
+  function saveStateSoon(delay = 120) {
+    if (saveStateTimer) clearTimeout(saveStateTimer);
+    saveStateTimer = setTimeout(() => {
+      saveStateTimer = null;
+      saveState();
+    }, delay);
+  }
+
   function applyImportedState(raw) {
     const parsed = migrateState(raw || {});
     const def = structuredDefault();
@@ -959,6 +1011,25 @@
 
   function uid() {
     return Math.random().toString(16).slice(2) + Date.now().toString(16);
+  }
+
+  let cachedSeedSalt = null;
+  function getUserSeedSalt() {
+    if (cachedSeedSalt) return cachedSeedSalt;
+    try {
+      const existing = localStorage.getItem(USER_SEED_SALT_KEY);
+      if (existing) {
+        cachedSeedSalt = existing;
+        return existing;
+      }
+      const salt = uid();
+      localStorage.setItem(USER_SEED_SALT_KEY, salt);
+      cachedSeedSalt = salt;
+      return salt;
+    } catch {
+      cachedSeedSalt = cachedSeedSalt || "seed";
+      return cachedSeedSalt;
+    }
   }
 
   // ---------- Toast ----------
@@ -1023,6 +1094,17 @@
   const toggleHiResPngEl = el("toggleHiResPng");
   const toggleFullGhostEl = el("toggleFullGhost");
   const btnSimForest = el("btnSimForest");
+  const focusIndicatorEl = el("focusIndicator");
+  const focusLabelEl = el("focusLabel");
+  const focusBackEl = el("focusBack");
+  const scaleDebugEl = el("scaleDebug");
+
+  let focusMode = "grid";
+  let focusedCourse = null;
+  let lastCourseCells = [];
+  let leavesEnabled = true;
+  let scaleDebugOn = false;
+  let lastScaleStats = {};
 
   // ---------- Utilities ----------
   function escapeHtml(s) {
@@ -1031,18 +1113,326 @@
 
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
 
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function lerpInt(a, b, t) { return Math.round(lerp(a, b, t)); }
+
+  function smoothstep(edge0, edge1, x) {
+    const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  const IDLE_EPS = 0.02;
+  const IDLE_TARGET_FRAC = 0.10;
+  const EFFORT_MORPH_ONSET = 0.06;
+  const EFFORT_MORPH_FULL = 0.35;
+  const EFFORT_TASKS_CAP = 6;
+  const EFFORT_DAYS_CAP = 5;
+  const EFFORT_WORDS_CAP = 220;
+
+  function computeEffortAbs(tasks = 0, writingDays = 0, words = 0) {
+    if (!tasks && !writingDays && !words) return 0;
+    const tasksN = clamp(tasks / EFFORT_TASKS_CAP, 0, 1);
+    const daysN = clamp(writingDays / EFFORT_DAYS_CAP, 0, 1);
+    const wordsN = clamp(words / EFFORT_WORDS_CAP, 0, 1);
+    const effort = 0.45 * daysN + 0.35 * tasksN + 0.20 * wordsN;
+    return clamp(effort, 0, 1);
+  }
+
+  function effortGateFor(effortAbs, idleMode = false) {
+    if (idleMode) return 0;
+    return smoothstep(EFFORT_MORPH_ONSET, EFFORT_MORPH_FULL, clamp(effortAbs, 0, 1));
+  }
+
+  function targetFracForGrowth(growthRel, idleMode = false) {
+    if (idleMode) return IDLE_TARGET_FRAC;
+    return 0.28 + (0.62 - 0.28) * smoothstep(0.0, 1.0, clamp(growthRel || 0, 0, 1));
+  }
+
+  function getGrowthN(data = {}) {
+    const weekly = clamp(data.weeklyScoreN || 0, 0, 1);
+    const tasksBase = clamp(data.tasksN || 0, 0, 1);
+    const wordsBase = clamp(data.wordsN || 0, 0, 1);
+    const recursion = clamp(data.recursionN || 0, 0, 1);
+    const cohesion = clamp(data.cohesionN || 0, 0, 1);
+
+    const tasksTerm = Math.pow(tasksBase, 0.75);
+    const wordsTerm = Math.pow(wordsBase, 0.60);
+
+    const weights = {
+      weekly: 0.35,
+      tasks: 0.20,
+      words: 0.15,
+      recursion: 0.15,
+      cohesion: 0.15
+    };
+
+    const rawGrowth =
+      weights.weekly * weekly +
+      weights.tasks * tasksTerm +
+      weights.words * wordsTerm +
+      weights.recursion * recursion +
+      weights.cohesion * cohesion;
+
+    const growthN = clamp(rawGrowth, 0, 1);
+    return {
+      value: growthN,
+      rawGrowth,
+      weekly,
+      tasksTerm,
+      wordsTerm,
+      recursion,
+      cohesion
+    };
+  }
+
+  function computeGrowthNormalization(courses, courseSignals = {}) {
+    const byCourseId = new Map();
+    let minRaw = Infinity;
+    let maxRaw = -Infinity;
+
+    courses.forEach((course) => {
+      const info = courseSignals[course]?.growthInfo || getGrowthN({});
+      const raw = info?.rawGrowth ?? 0;
+      minRaw = Math.min(minRaw, raw);
+      maxRaw = Math.max(maxRaw, raw);
+      byCourseId.set(course, { rawGrowth: raw, growthInfo: info });
+    });
+
+    const range = maxRaw - minRaw;
+    const flat = range < 1e-6;
+    if (flat) {
+      courses.forEach((course) => {
+        const entry = byCourseId.get(course) || {};
+        const raw = entry.rawGrowth ?? 0;
+        const abs = (raw >= 0 && raw <= 1)
+          ? clamp(raw, 0, 1)
+          : (1 - Math.exp(-1.5 * Math.max(0, raw)));
+        const growthRel = clamp(0.15 + 0.85 * abs, 0.15, 1);
+        byCourseId.set(course, { ...entry, rel: 0, growthRel });
+      });
+    } else {
+      const denom = range + 1e-6;
+      courses.forEach((course) => {
+        const entry = byCourseId.get(course) || {};
+        const raw = entry.rawGrowth ?? 0;
+        const rel = (raw - minRaw) / denom;
+        const growthRel = clamp(0.15 + 0.85 * rel, 0, 1);
+        byCourseId.set(course, { ...entry, rel, growthRel });
+      });
+    }
+
+    return { minRaw, maxRaw, range, flat, byCourseId };
+  }
+
+  function getEffectiveCourseSignals(courseName, baseSignals, flags) {
+    const s = { ...baseSignals };
+    if (!flags?.simulateMax) return s;
+    if (s.weeklyScoreN != null) s.weeklyScoreN = 1;
+    if (s.weekendScoreN != null) s.weekendScoreN = 1;
+    if (s.tasksN != null) s.tasksN = 1;
+    if (s.wordsN != null) s.wordsN = 1;
+    if (s.recursionN != null) s.recursionN = 1;
+    if (s.cohesionN != null) s.cohesionN = 1;
+    if (s.diversityN != null) s.diversityN = 1;
+    if (s.argumentN != null) s.argumentN = 1;
+    if (s.abstractionN != null) s.abstractionN = 1;
+    if (s.tasks != null) s.tasks = Math.max(s.tasks, s.maxTasks ?? 60);
+    if (s.words != null) s.words = Math.max(s.words, s.maxWords ?? 2400);
+    if (s.recursion != null) s.recursion = Math.max(s.recursion, s.maxRecursion ?? s.recursion);
+    if (s.abstraction != null) s.abstraction = Math.max(s.abstraction, s.maxAbstraction ?? s.abstraction);
+    if (s.cohesion != null) s.cohesion = Math.max(s.cohesion, s.maxCohesion ?? s.cohesion);
+    if (s.argument != null) s.argument = Math.max(s.argument, s.maxArgument ?? s.argument);
+    if (s.diversity != null) s.diversity = Math.max(s.diversity, s.maxDiversity ?? s.diversity);
+    if (s.writingDays != null) s.writingDays = Math.max(s.writingDays, EFFORT_DAYS_CAP);
+    return s;
+  }
+
+  function signalSignature(eff) {
+    const fmt = (v) => (Math.round(clamp(Number(v) || 0, 0, 1) * 1000) / 1000).toFixed(3);
+    return [
+      fmt(eff.weeklyScoreN),
+      fmt(eff.weekendScoreN),
+      fmt(eff.tasksN),
+      fmt(eff.wordsN),
+      fmt(eff.recursionN),
+      fmt(eff.abstractionN),
+      fmt(eff.cohesionN),
+      fmt(eff.argumentN),
+      fmt(eff.diversityN),
+      fmt(eff.stress),
+      Math.round(eff.writingDays || 0)
+    ].join("|");
+  }
+
+  function getGeomCacheKey(courseName, flags, effectiveSignals, growthRel, weekId, dayKey, modeKey, seedSalt) {
+    const sprout = (!flags?.simulateMax && (growthRel ?? 0) < 0.18) ? 1 : 0;
+    const sig = hashString(signalSignature(effectiveSignals || {}));
+    return [
+      courseName,
+      `mode:${modeKey || "grid"}`,
+      `simMax:${flags?.simulateMax ? 1 : 0}`,
+      `sprout:${sprout}`,
+      `week:${weekId || ""}`,
+      `day:${dayKey || ""}`,
+      `seed:${seedSalt || ""}`,
+      `sig:${sig}`,
+      `gen:${GEN_VERSION}`
+    ].join("|");
+  }
+
+  const geomCache = new Map();
+  const prevGeomByKey = new Map();
+
+  function invalidateForestCaches() {
+    geomCache.clear();
+    prevGeomByKey.clear();
+  }
+
+  const MetricsReporter = (() => {
+    let frame = 0;
+    let lastReport = null;
+
+    function ensurePanel() {
+      if (!METRICS.toPanel) return null;
+      if (typeof document === "undefined") return null;
+      let panel = document.getElementById(METRICS.panelId);
+      if (!panel) {
+        panel = document.createElement("pre");
+        panel.id = METRICS.panelId;
+        panel.style.position = "fixed";
+        panel.style.top = "92px";
+        panel.style.left = "12px";
+        panel.style.zIndex = "80";
+        panel.style.padding = "8px 10px";
+        panel.style.border = "1px solid rgba(0,0,0,0.12)";
+        panel.style.borderRadius = "8px";
+        panel.style.background = "rgba(255,255,255,0.85)";
+        panel.style.color = "#111";
+        panel.style.fontSize = "11px";
+        panel.style.lineHeight = "1.4";
+        panel.style.opacity = "0.85";
+        panel.style.pointerEvents = "none";
+        panel.style.whiteSpace = "pre-wrap";
+        document.body.appendChild(panel);
+      }
+      return panel;
+    }
+
+    function round(n, d = 3) {
+      if (typeof n !== "number" || !isFinite(n)) return "—";
+      return n.toFixed(d);
+    }
+
+    function summarizeCourse(courseName, stats) {
+      return {
+        name: courseName,
+        growthRel: stats?.growthRel ?? 0,
+        scaleFinal: stats?.scale?.scaleFinal ?? 0
+      };
+    }
+
+    function computeWarnings(report) {
+      const warnings = [];
+      const spread = report?.normalization?.spread ?? 0;
+      if (spread < METRICS.warn.spreadEps) warnings.push("GROWTH_SPREAD_COLLAPSE");
+
+      const relVals = [];
+      const relMap = report?.normalization?.byCourse || {};
+      Object.values(relMap).forEach((v) => {
+        if (typeof v?.growthRel === "number") relVals.push(v.growthRel);
+      });
+      if (relVals.length) {
+        const relSpread = Math.max(...relVals) - Math.min(...relVals);
+        if (relSpread < 0.05) warnings.push("REL_VALUES_FLAT");
+      }
+      if (report?.normalization?.idleMode) warnings.push("IDLE_MODE_SPROUT");
+
+      (report?.courses || []).forEach((c) => {
+        const bboxH = c?.bbox?.h ?? 0;
+        if (bboxH < METRICS.warn.bboxMinHpx) warnings.push(`BBOX_DEGENERATE:${c.name}`);
+        const scaleRaw = c?.scale?.yScaleRaw ?? c?.scale?.scaleRaw;
+        const widthCap = c?.scale?.widthCapScale;
+        if (typeof scaleRaw === "number" && typeof widthCap === "number") {
+          if (widthCap < scaleRaw * METRICS.warn.widthCapDominanceRatio) {
+            warnings.push(`WIDTH_CAP_DOMINANT:${c.name}`);
+          }
+        }
+      });
+      return warnings;
+    }
+
+    function formatText(report) {
+      const spread = report?.normalization?.spread ?? 0;
+      const lines = [];
+      lines.push(`frame=${report.frame} mode=${report.mode} spread=${round(spread, 3)}`);
+      if (report.selectedCourse) {
+        const c = (report.courses || []).find((row) => row.name === report.selectedCourse);
+        if (c) {
+          lines.push(`selected=${c.name} growthRel=${round(c.growthRel, 3)} targetFrac=${round(c.targetFrac, 3)}`);
+          lines.push(`bboxH=${round(c.bbox?.h, 1)} scaleFinal=${round(c.scale?.scaleFinal, 3)}`);
+        }
+      }
+      const topGrowth = report?.top?.byGrowthRel || [];
+      if (topGrowth.length) {
+        lines.push(`topGrowthRel: ${topGrowth.map(t => `${t.name}:${round(t.growthRel, 3)}`).join(" | ")}`);
+      }
+      const topScale = report?.top?.byScaleFinal || [];
+      if (topScale.length) {
+        lines.push(`topScaleFinal: ${topScale.map(t => `${t.name}:${round(t.scaleFinal, 3)}`).join(" | ")}`);
+      }
+      const warnings = report?.warnings || [];
+      if (warnings.length) lines.push(`warnings: ${warnings.join(", ")}`);
+      return lines.join("\n");
+    }
+
+    function publish(report) {
+      if (METRICS.toConsole && typeof console !== "undefined") {
+        const spread = report?.normalization?.spread ?? 0;
+        const title = `[ForestMetrics] frame=${report.frame} mode=${report.mode} spread=${round(spread, 3)}`;
+        console.groupCollapsed(title);
+        console.log("report", report);
+        console.log("warnings", report.warnings || []);
+        console.log("top", report.top || {});
+        console.groupEnd();
+      }
+      if (METRICS.toPanel) {
+        const panel = ensurePanel();
+        if (panel) panel.textContent = formatText(report);
+      }
+    }
+
+    function report(payload) {
+      if (!METRICS.enabled) return;
+      frame += 1;
+      if (frame % METRICS.reportEveryNFrames !== 0) return;
+      const report = {
+        ...payload,
+        frame
+      };
+      report.normalization = report.normalization || {};
+      if (typeof report.normalization.spread !== "number") {
+        report.normalization.spread = (report.normalization.maxRaw ?? 0) - (report.normalization.minRaw ?? 0);
+      }
+      report.warnings = computeWarnings(report);
+      lastReport = report;
+      publish(report);
+    }
+
+    return { report };
+  })();
+
   function getCSSVar(name){
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
-  function initCanvasHiDPI(canvas, width = null, height = null) {
+  function initCanvasHiDPI(canvas, width = null, height = null, ctxOptions = null) {
     const rect = canvas.getBoundingClientRect();
     const cssW = width ?? rect.width;
     const cssH = height ?? rect.height;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.floor(cssW * dpr));
     canvas.height = Math.max(1, Math.floor(cssH * dpr));
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", ctxOptions || undefined);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { ctx, w: cssW, h: cssH, dpr };
   }
@@ -1091,6 +1481,116 @@
     if (themeSelectEl) themeSelectEl.value = next;
   }
 
+  function updateFocusUi() {
+    if (!focusIndicatorEl) return;
+    focusIndicatorEl.style.display = focusMode !== "grid" ? "flex" : "none";
+    if (focusLabelEl) {
+      if (focusMode === "focus" && focusedCourse) {
+        focusLabelEl.textContent = `Focus: ${focusedCourse}`;
+      } else if (focusMode === "hybrid" && focusedCourse) {
+        focusLabelEl.textContent = `Hybrid: ${focusedCourse}`;
+      } else {
+        focusLabelEl.textContent = "Focus";
+      }
+    }
+  }
+
+  function setFocusMode(mode) {
+    if (!mode || mode === focusMode) return;
+    focusMode = mode;
+    if (focusMode === "grid") focusedCourse = null;
+    updateFocusUi();
+    debouncedForest();
+  }
+
+  function setFocusCourse(course, modeOverride = null) {
+    if (!course) return;
+    focusedCourse = course;
+    if (modeOverride) {
+      focusMode = modeOverride;
+    } else if (focusMode === "grid") {
+      focusMode = "hybrid";
+    }
+    updateFocusUi();
+    debouncedForest();
+  }
+
+  function exitFocusMode() {
+    if (focusMode === "focus") {
+      focusMode = "hybrid";
+    } else if (focusMode === "hybrid") {
+      focusMode = "grid";
+      focusedCourse = null;
+    } else {
+      return;
+    }
+    updateFocusUi();
+    debouncedForest();
+  }
+
+  function renderScaleDebug(courseName = null) {
+    if (!scaleDebugEl) return;
+    scaleDebugEl.style.display = scaleDebugOn ? "block" : "none";
+    if (!scaleDebugOn) return;
+    let stats = null;
+    if (courseName && lastScaleStats[courseName]) {
+      stats = lastScaleStats[courseName];
+    } else if (focusedCourse && lastScaleStats[focusedCourse]) {
+      stats = lastScaleStats[focusedCourse];
+    } else {
+      const entries = Object.values(lastScaleStats || {});
+      if (entries.length) {
+        stats = entries.sort((a, b) => (b.growthRel || 0) - (a.growthRel || 0))[0];
+      }
+    }
+    if (!stats) {
+      scaleDebugEl.textContent = "Scale: —";
+      return;
+    }
+    const fmt = (v, n = 2) => (typeof v === "number" && isFinite(v)) ? v.toFixed(n) : "—";
+    scaleDebugEl.innerHTML = [
+      `<div><b>${stats.course || "Course"}</b></div>`,
+      `<div>growthN: ${fmt(stats.growthN, 2)}</div>`,
+      `<div>rel: ${fmt(stats.rel, 3)}</div>`,
+      `<div>growthRel: ${fmt(stats.growthRel, 3)}</div>`,
+      `<div>flatNorm: ${stats.flatNorm ? "yes" : "no"}</div>`,
+      `<div>range: ${fmt(stats.normRange, 6)}</div>`,
+      `<div>mode: ${stats.normMode || "relative"}</div>`,
+      `<div>isSprout: ${stats.isSprout ? "yes" : "no"}</div>`,
+      `<div>effortAbs: ${fmt(stats.effortAbs, 3)}</div>`,
+      `<div>effortTotal: ${fmt(stats.effortTotal, 3)}</div>`,
+      `<div>idleMode: ${stats.idleMode ? "yes" : "no"}</div>`,
+      `<div>desiredPx: ${fmt(stats.desiredPx, 2)}</div>`,
+      `<div>recDepth: ${fmt(stats.recDepth, 0)}</div>`,
+      `<div>branchProb: ${fmt(stats.branchProb, 3)}</div>`,
+      `<div>clusterProb: ${fmt(stats.clusterProb, 3)}</div>`,
+      `<div>segments: ${fmt(stats.segmentsDrawn, 0)}</div>`,
+      `<div>branchEvents: ${fmt(stats.branchEvents, 0)}</div>`,
+      `<div>minRaw: ${fmt(stats.minRaw, 3)}</div>`,
+      `<div>maxRaw: ${fmt(stats.maxRaw, 3)}</div>`,
+      `<div>rawGrowth: ${fmt(stats.rawGrowth, 3)}</div>`,
+      `<div>weekly: ${fmt(stats.weekly, 2)}</div>`,
+      `<div>tasks: ${fmt(stats.tasksTerm, 2)}</div>`,
+      `<div>words: ${fmt(stats.wordsTerm, 2)}</div>`,
+      `<div>recursion: ${fmt(stats.recursion, 2)}</div>`,
+      `<div>cohesion: ${fmt(stats.cohesion, 2)}</div>`,
+      `<div>trunkBudget: ${fmt(stats.trunkBudgetSteps, 0)}</div>`,
+      `<div>trunkStep: ${fmt(stats.trunkStep, 0)}</div>`,
+      `<div>trunkLenMult: ${fmt(stats.trunkLenMult, 2)}</div>`,
+      `<div>targetFrac: ${fmt(stats.targetFrac, 3)}</div>`,
+      `<div>availH: ${fmt(stats.availH, 1)}</div>`,
+      `<div>targetH: ${fmt(stats.targetH, 1)}</div>`,
+      `<div>yScaleRaw: ${fmt(stats.yScaleRaw, 3)}</div>`,
+      `<div>xCap: ${fmt(stats.widthCapScale, 3)}</div>`,
+      `<div>xScale: ${fmt(stats.xScale, 3)} yScale: ${fmt(stats.yScale, 3)}</div>`,
+      `<div>aniso: ${fmt(stats.appliedAniso, 3)}</div>`,
+      `<div>widthLimited: ${stats.widthLimited ? "yes" : "no"}</div>`,
+      `<div>bboxH: ${fmt(stats.bboxH, 1)}</div>`,
+      `<div>scaleFinal: ${fmt(stats.scaleFinal, 3)}</div>`,
+      `<div>widthCap: ${fmt(stats.widthCapScale, 3)}</div>`
+    ].join("");
+  }
+
   // ISO week id: YYYY-Www
   function isoWeekId(date = new Date()) {
     const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -1117,6 +1617,25 @@
     return isoWeekId(new Date(mondayTarget.getUTCFullYear(), mondayTarget.getUTCMonth(), mondayTarget.getUTCDate()));
   }
 
+  function isoWeekStartKey(weekId) {
+    const [yPart, wPart] = String(weekId || "").split("-W");
+    const y = Number(yPart);
+    const w = Number(wPart);
+    if (!y || !w) return "1970-01-01";
+    const jan4 = new Date(Date.UTC(y, 0, 4));
+    const dayNum = jan4.getUTCDay() || 7;
+    const mondayWeek1 = new Date(jan4);
+    mondayWeek1.setUTCDate(jan4.getUTCDate() - (dayNum - 1));
+    const mondayTarget = new Date(mondayWeek1);
+    mondayTarget.setUTCDate(mondayWeek1.getUTCDate() + (w - 1) * 7);
+    const yyyy = mondayTarget.getUTCFullYear();
+    const mm = String(mondayTarget.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(mondayTarget.getUTCDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const WEEKLY_ROLLOVER_HOUR_ET = 5;
+
   function getETParts(date = new Date()) {
     const fmt = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
@@ -1142,6 +1661,12 @@
   function etDateKey(date = new Date()) {
     const p = getETParts(date);
     return `${p.year}-${p.month}-${p.day}`;
+  }
+
+  function currentWeekId(date = new Date()) {
+    const shifted = new Date(date.getTime() - WEEKLY_ROLLOVER_HOUR_ET * 3600000);
+    const p = getETParts(shifted);
+    return isoWeekId(new Date(Number(p.year), Number(p.month) - 1, Number(p.day)));
   }
 
   function isMondayAfterNoonET(date = new Date()) {
@@ -1292,7 +1817,7 @@
         state.courseNotes[course].notes = notes.value;
         updateWeeklySession(course, notes.value);
         saveState();
-        const weekId = isoWeekId(new Date());
+        const weekId = currentWeekId();
         const weekly = weeklyScoreForCourse(course, weekId);
         const todayKey = etDateKey();
         const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
@@ -1302,7 +1827,7 @@
       });
       card.appendChild(notes);
 
-      const weekId = isoWeekId(new Date());
+      const weekId = currentWeekId();
       const weekly = weeklyScoreForCourse(course, weekId);
       const todayKey = etDateKey();
       const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
@@ -2676,11 +3201,34 @@
 
   // ---------- Forest visualization ----------
   let lastForestGeom = null;
+  const WEEKLY_ARCHIVE_PREFIX = `${STORAGE_KEY}_weekly_`;
+
+  function saveWeeklyArchive(store) {
+    if (!store?.weekId) return;
+    try {
+      localStorage.setItem(`${WEEKLY_ARCHIVE_PREFIX}${store.weekId}`, JSON.stringify(store));
+    } catch {}
+  }
+
+  function loadWeeklyArchive(weekId) {
+    if (!weekId) return null;
+    try {
+      const raw = localStorage.getItem(`${WEEKLY_ARCHIVE_PREFIX}${weekId}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.weekId !== weekId) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
 
   function getWeeklyStore(weekId) {
     state.forest.weekly = state.forest.weekly || { weekId: "", courses: {} };
     if (state.forest.weekly.weekId !== weekId) {
-      state.forest.weekly = { weekId, courses: {} };
+      if (state.forest.weekly.weekId) saveWeeklyArchive(state.forest.weekly);
+      const archived = loadWeeklyArchive(weekId);
+      state.forest.weekly = archived || { weekId, courses: {} };
     }
     return state.forest.weekly;
   }
@@ -2715,7 +3263,9 @@
     const totalClauses = Math.max(1, sentences.length + clauseSeparators);
     const avgClauseLen = words ? (words / totalClauses) : 0;
 
-    const subordinateCount = countMatches(lower, new RegExp(`\b(${SUBORDINATE_MARKERS.join("|")})\b`, "g"));
+    // BEGIN PATCH: fix word boundary regex
+    const subordinateCount = countMatches(lower, new RegExp(`\\b(${SUBORDINATE_MARKERS.join("|")})\\b`, "g"));
+    // END PATCH
     const punctCount = countMatches(raw, /[,;:—-]/g);
 
     const clauseLenN = clamp((avgClauseLen - 6) / 16, 0, 1);
@@ -2773,7 +3323,7 @@
   }
 
   function updateWeeklySession(course, notes) {
-    const weekId = isoWeekId(new Date());
+    const weekId = currentWeekId();
     const store = getWeeklyStore(weekId);
     const dayKey = etDateKey();
     store.courses[course] = store.courses[course] || { days: {}, total: 0 };
@@ -2838,7 +3388,7 @@
       weeklyChecked
     };
 
-    const weekId = isoWeekId(new Date());
+    const weekId = currentWeekId();
     return { perCourse, total, mode, weekId };
   }
 
@@ -2872,6 +3422,10 @@
     return new Set([...words, ...phrases].filter(Boolean));
   }
 
+  function getCourseKey(course) {
+    return course?.id ?? course?.key ?? course?.name ?? String(course);
+  }
+
   function courseComplexity(metrics) {
     const words = clamp((metrics.words || 0) / 220, 0, 1);
     const recursion = clamp(metrics.recursion || 0, 0, 1);
@@ -2890,6 +3444,8 @@
   function buildFullGhost(w, h, padL, padR, padT, baseY, perCourse, mode, weekId) {
     const courses = state.courses || [];
     const simulateMax = !!state.forest.simulateMax;
+    const seedSalt = getUserSeedSalt();
+    const weekStartKey = isoWeekStartKey(weekId);
     const count = Math.max(1, courses.length);
     const spacing = w / (count + 1);
     const maxSource = simulateMax ? (state.forest.perCourseMax || {}) : perCourse;
@@ -2911,48 +3467,74 @@
       const x0 = spacing * (idx + 1);
       const metrics = perCourse[course] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
       const maxMetrics = (state.forest.perCourseMax || {})[course] || {};
-      const useMetrics = simulateMax ? {
-        words: maxMetrics.words ?? metrics.words,
-        recursion: maxMetrics.recursion ?? metrics.recursion,
-        abstraction: maxMetrics.abstraction ?? metrics.abstraction,
-        cohesion: maxMetrics.cohesion ?? metrics.cohesion,
-        argument: maxMetrics.argument ?? metrics.argument,
-        diversity: maxMetrics.diversity ?? metrics.diversity,
-        tasks: maxMetrics.tasks ?? metrics.tasks
-      } : metrics;
-      const wordsN = clamp((useMetrics.words || 0) / currentMax.words, 0, 1);
-      const recursionN = clamp((useMetrics.recursion || 0) / currentMax.recursion, 0, 1);
-      const abstractionN = clamp((useMetrics.abstraction || 0) / currentMax.abstraction, 0, 1);
-      const cohesionN = clamp((useMetrics.cohesion || 0) / currentMax.cohesion, 0, 1);
-      const argumentN = clamp((useMetrics.argument || 0) / currentMax.argument, 0, 1);
-      const diversityN = clamp((useMetrics.diversity || 0) / currentMax.diversity, 0, 1);
-      const tasksN = clamp((useMetrics.tasks || 0) / currentMax.tasks, 0, 1);
+      const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
+      const recursionN = clamp((metrics.recursion || 0) / currentMax.recursion, 0, 1);
+      const abstractionN = clamp((metrics.abstraction || 0) / currentMax.abstraction, 0, 1);
+      const cohesionN = clamp((metrics.cohesion || 0) / currentMax.cohesion, 0, 1);
+      const argumentN = clamp((metrics.argument || 0) / currentMax.argument, 0, 1);
+      const diversityN = clamp((metrics.diversity || 0) / currentMax.diversity, 0, 1);
+      const tasksN = clamp((metrics.tasks || 0) / currentMax.tasks, 0, 1);
       const stress = clamp(metrics.stress || 0, 0, 1);
+      const baseSignals = {
+        words: metrics.words || 0,
+        recursion: metrics.recursion || 0,
+        abstraction: metrics.abstraction || 0,
+        cohesion: metrics.cohesion || 0,
+        argument: metrics.argument || 0,
+        diversity: metrics.diversity || 0,
+        tasks: metrics.tasks || 0,
+        stress,
+        wordsN,
+        recursionN,
+        abstractionN,
+        cohesionN,
+        argumentN,
+        diversityN,
+        tasksN,
+        weeklyScoreN: 1,
+        weekendScoreN: 1,
+        writingDays: EFFORT_DAYS_CAP,
+        maxWords: maxMetrics.words ?? metrics.words,
+        maxRecursion: maxMetrics.recursion ?? metrics.recursion,
+        maxAbstraction: maxMetrics.abstraction ?? metrics.abstraction,
+        maxCohesion: maxMetrics.cohesion ?? metrics.cohesion,
+        maxArgument: maxMetrics.argument ?? metrics.argument,
+        maxDiversity: maxMetrics.diversity ?? metrics.diversity,
+        maxTasks: maxMetrics.tasks ?? metrics.tasks
+      };
+      const eff = getEffectiveCourseSignals(course, baseSignals, { simulateMax });
+      const effWordsN = eff.wordsN ?? 0;
+      const effRecursionN = eff.recursionN ?? 0;
+      const effAbstractionN = eff.abstractionN ?? 0;
+      const effCohesionN = eff.cohesionN ?? 0;
+      const effArgumentN = eff.argumentN ?? 0;
+      const effDiversityN = eff.diversityN ?? 0;
+      const effTasksN = eff.tasksN ?? 0;
       const noteText = state.courseNotes?.[course]?.notes || "";
       const keywordCount = courseKeywords(course).size;
       const phraseCount = keyPhrases(noteText, 8).length;
-      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
-      const weeklyScoreN = 1;
-      const taskScoreN = 1;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + effCohesionN) / 3, 0, 1);
+      const weeklyScoreN = eff.weeklyScoreN ?? 1;
+      const taskScoreN = eff.weekendScoreN ?? 1;
       const isGcas = /gcas/i.test(course);
       const heightScale = isGcas ? 1 : 0.7;
       const canopyBoost = isGcas ? 1 : 1.2;
       const maxHeight = Math.max(40, baseY - padT - 70);
       const height = Math.min(
         maxHeight * 0.6 * heightScale,
-        (12 + 40 * weeklyScoreN + 16 * (wordsN * weeklyScoreN) + 10 * (tasksN * weeklyScoreN)) * heightScale
+        (12 + 40 * weeklyScoreN + 16 * (effWordsN * weeklyScoreN) + 10 * (effTasksN * weeklyScoreN)) * heightScale
       );
-      const complexityN = clamp((wordsN + recursionN + abstractionN + cohesionN + argumentN + diversityN + weeklyScoreN) / 7, 0, 1);
-      const branchiness = clamp(0.25 + 0.9 * recursionN * weeklyScoreN + 0.2 * tasksN * weeklyScoreN, 0.2, 1.8);
-      const leaves = clamp(0.4 + 1.6 * taskScoreN * canopyBoost + 0.8 * abstractionN * weeklyScoreN + 0.4 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2);
-      const crownSpread = clamp(1.0 + 1.4 * taskScoreN * canopyBoost + 0.7 * abstractionN, 1.0, 4.0);
+      const complexityN = clamp((effWordsN + effRecursionN + effAbstractionN + effCohesionN + effArgumentN + effDiversityN + weeklyScoreN) / 7, 0, 1);
+      const branchiness = clamp(0.25 + 0.9 * effRecursionN * weeklyScoreN + 0.2 * effTasksN * weeklyScoreN, 0.2, 1.8);
+      const leaves = clamp(0.4 + 1.6 * taskScoreN * canopyBoost + 0.8 * effAbstractionN * weeklyScoreN + 0.4 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2);
+      const crownSpread = clamp(1.0 + 1.4 * taskScoreN * canopyBoost + 0.7 * effAbstractionN, 1.0, 4.0);
       const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
 
       drawTree(ctx, {
         x0,
         baseY,
         height,
-        trunkW: 0.4 + 1.4 * argumentN,
+        trunkW: 0.4 + 1.4 * effArgumentN,
         branchiness,
         leaves,
         crownSpread,
@@ -2962,26 +3544,29 @@
         padR,
         w,
         dayLight,
-        recursionN,
-        abstractionN,
-        cohesionN,
-        argumentN,
-        diversityN,
-        tasksN,
-        wordsN,
+        recursionN: effRecursionN,
+        abstractionN: effAbstractionN,
+        cohesionN: effCohesionN,
+        argumentN: effArgumentN,
+        diversityN: effDiversityN,
+        tasksN: effTasksN,
+        wordsN: effWordsN,
         conceptN,
         weeklyScoreN,
         weekendScoreN: taskScoreN,
         noteText,
-        recursion: metrics.recursion || 0,
-        abstraction: metrics.abstraction || 0,
-        cohesion: metrics.cohesion || 0,
-        argument: metrics.argument || 0,
-        diversity: metrics.diversity || 0,
+        recursion: eff.recursion ?? metrics.recursion ?? 0,
+        abstraction: eff.abstraction ?? metrics.abstraction ?? 0,
+        cohesion: eff.cohesion ?? metrics.cohesion ?? 0,
+        argument: eff.argument ?? metrics.argument ?? 0,
+        diversity: eff.diversity ?? metrics.diversity ?? 0,
         complexityN,
-        seedKey: `${weekId}|${course}|full`,
+        seedKey: `${course}|${weekStartKey}|${seedSalt}|full`,
         course,
-        mode
+        mode,
+        effortAbs: 1,
+        effortTotal: 1,
+        idleMode: false
       }, ghostGeom);
     });
     return ghostGeom;
@@ -3014,12 +3599,1285 @@
     ctx.putImageData(img, 0, 0);
   }
 
-  function renderForest() {
+  // BEGIN PATCH: capture + embed helpers
+  function computeGeomBounds(geom) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    const expand = (x, y) => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    };
+
+    (geom?.paths || []).forEach((p) => {
+      if (p.type === "circle") {
+        const r = Math.max(0, p.r || 0);
+        const pad = (p.sw || 0) * 0.5;
+        expand((p.cx || 0) - r - pad, (p.cy || 0) - r - pad);
+        expand((p.cx || 0) + r + pad, (p.cy || 0) + r + pad);
+      } else if (typeof p.x1 === "number") {
+        const pad = (p.sw || 0) * 0.5;
+        expand(p.x1 - pad, p.y1 - pad);
+        expand(p.x1 + pad, p.y1 + pad);
+        expand(p.x2 - pad, p.y2 - pad);
+        expand(p.x2 + pad, p.y2 + pad);
+      }
+    });
+
+    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
+      return { minX: 0, minY: 0, maxX: 1, maxY: 1, width: 1, height: 1 };
+    }
+    return { minX, minY, maxX, maxY, width: maxX - minX || 1, height: maxY - minY || 1 };
+  }
+
+  function buildCourseCells(w, h, courses, padL, padR, padT, padB, labelBand = 24) {
+    const count = Math.max(1, courses.length);
+    const totalW = Math.max(1, w - padL - padR);
+    const cellW = totalW / count;
+    const cellH = Math.max(1, h - padT - padB - labelBand);
+    return courses.map((_, i) => ({
+      x: padL + i * cellW,
+      y: padT,
+      w: cellW,
+      h: cellH,
+      labelY: padT + cellH + labelBand
+    }));
+  }
+
+  function fitBoundsToCell(bounds, cell, padding = 16) {
+    const innerW = Math.max(1, cell.w - padding * 2);
+    const innerH = Math.max(1, cell.h - padding * 2);
+    const scale = Math.min(innerW / bounds.width, innerH / bounds.height);
+    const offsetX = cell.x + padding + (innerW - bounds.width * scale) / 2 - bounds.minX * scale;
+    const offsetY = cell.y + padding + (innerH - bounds.height * scale) / 2 - bounds.minY * scale;
+    return { scale, offsetX, offsetY };
+  }
+
+  function applyTransformToGeom(geom, t) {
+    (geom?.paths || []).forEach((p) => {
+      if (p.type === "circle") {
+        p.cx = (p.cx || 0) * t.scale + t.offsetX;
+        p.cy = (p.cy || 0) * t.scale + t.offsetY;
+        p.r = Math.max(0.1, (p.r || 0) * t.scale);
+        // Keep stroke width in screen space (do not scale).
+      } else if (typeof p.x1 === "number") {
+        p.x1 = p.x1 * t.scale + t.offsetX;
+        p.y1 = p.y1 * t.scale + t.offsetY;
+        p.x2 = p.x2 * t.scale + t.offsetX;
+        p.y2 = p.y2 * t.scale + t.offsetY;
+        // Keep stroke width in screen space (do not scale).
+      }
+    });
+    if (Array.isArray(geom?.trunkNodes)) {
+      geom.trunkNodes = geom.trunkNodes.map((n) => ({
+        x: n.x * t.scale + t.offsetX,
+        y: n.y * t.scale + t.offsetY
+      }));
+    }
+    if (Array.isArray(geom?.leafPoints)) {
+      geom.leafPoints = geom.leafPoints.map((p) => ({
+        ...p,
+        x: p.x * t.scale + t.offsetX,
+        y: p.y * t.scale + t.offsetY
+      }));
+    }
+  }
+
+  function renderGeom(ctx, geom, scaleX = 1, scaleY = 1) {
+    const eff = Math.max(0.0001, Math.sqrt(Math.abs(scaleX * scaleY)));
+    const isSprout = !!geom?.morphStats?.isSprout;
+    const maxTrunkPx = isSprout ? 0.9 : 1.6;
+    (geom?.paths || []).forEach((p) => {
+      if (p.type === "circle") {
+        const r = Math.max(0, p.r || 0);
+        if (p.fill && p.fill !== "none") {
+          ctx.save();
+          ctx.globalAlpha = p.fillAlpha ?? 1;
+          ctx.fillStyle = p.fill;
+          ctx.beginPath();
+          ctx.arc(p.cx, p.cy, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        const weight = p.sw ?? 0;
+        const hasStroke = (p.stroke && p.stroke !== "none") && weight > 0;
+        if (hasStroke) {
+          ctx.save();
+          ctx.globalAlpha = p.alpha ?? 1;
+          ctx.strokeStyle = p.stroke || "#000000";
+          const desiredPx = Math.max(0, Math.min(STROKE_BASE_PX * weight, maxTrunkPx));
+          ctx.lineWidth = desiredPx / eff;
+          ctx.beginPath();
+          ctx.arc(p.cx, p.cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      } else if (typeof p.x1 === "number") {
+        const weight = (typeof p.sw === "number") ? p.sw : 1;
+        const alpha = p.alpha ?? 1;
+        if (weight <= 0 || alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = p.stroke || "#000000";
+        const isTrunk = p.type === "trunk" || p.zoneType === "trunk";
+        const rawPx = STROKE_BASE_PX * weight;
+        const desiredPx = isTrunk
+          ? Math.min(rawPx, maxTrunkPx)
+          : clamp(rawPx, STROKE_MIN_PX, 1.6);
+        ctx.lineWidth = desiredPx / eff;
+        ctx.beginPath();
+        ctx.moveTo(p.x1, p.y1);
+        ctx.lineTo(p.x2, p.y2);
+        ctx.stroke();
+        ctx.restore();
+      } else if (p.d) {
+        const weight = (typeof p.sw === "number") ? p.sw : 1;
+        const alpha = p.alpha ?? 1;
+        if (weight <= 0 || alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = p.stroke || "#000000";
+        const desiredPx = clamp(STROKE_BASE_PX * weight, STROKE_MIN_PX, 1.6);
+        ctx.lineWidth = desiredPx / eff;
+        const path = new Path2D(p.d);
+        ctx.stroke(path);
+        ctx.restore();
+      }
+    });
+  }
+
+  function thinLeafPoints(points, params, rng) {
+    const kept = [];
+    const cell = Math.max(1, params.leafMinDist || 8);
+    const grid = new Map();
+    const key = (x, y) => `${(x / cell) | 0},${(y / cell) | 0}`;
+
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const keepProb = clamp(p.keepProb ?? 1, 0, 1);
+      if (rng() > keepProb) continue;
+      const k = key(p.x, p.y);
+      if (grid.has(k)) continue;
+      grid.set(k, true);
+      kept.push(p);
+    }
+    return kept;
+  }
+
+  function renderLeaves(ctx, geom, seedKey, settings) {
+    if (!leavesEnabled) return;
+    if (!settings?.enabled) return;
+    let points = geom?.leafPoints || [];
+    if (!points.length) return;
+    const basePx = settings.leafBasePx ?? 1.4;
+    const burstMult = settings.leafBurstMult ?? 1.6;
+    const trunkMult = settings.leafTrunkMult ?? 0.7;
+    const params = {
+      leafMinDist: settings.leafMinDist ?? 8,
+      leafCoreSuppression: settings.leafCoreSuppression ?? 0.5,
+      leafMaxPerTree: settings.leafMaxPerTree ?? 900,
+      leafBurstMult: burstMult,
+      leafTrunkMult: trunkMult
+    };
+    const rng = makeRng(`${seedKey}|leaf-thin`);
+    const prepared = points.map((p) => ({
+      ...p,
+      keepProb:
+        (p.state === "BURST" ? params.leafBurstMult : params.leafTrunkMult) *
+        (typeof p.bandNorm === "number" && p.bandNorm < 0.35 ? params.leafCoreSuppression : 1)
+    }));
+    points = thinLeafPoints(prepared, params, rng).slice(0, params.leafMaxPerTree);
+    geom.leafPoints = points;
+    const palette = [
+      "#3a2c1b", "#5a3a1c", "#7a3d1a", "#9b4a1f",
+      "#b8572a", "#d26a3a", "#e07f3f", "#f29c38",
+      "#c6423a", "#a8332b", "#7f2b2b", "#612727",
+      "#8d6a3c", "#a07c43"
+    ];
+
+    points.forEach((pt, idx) => {
+      const state = pt.state === "BURST" ? "BURST" : "TRUNK";
+      const probRand = seededRandom(seedKey, `leaf:${idx}:prob`);
+      const keepProb = state === "BURST"
+        ? (0.15 + 0.2 * probRand)
+        : (0.03 + 0.05 * probRand);
+      const keepRoll = seededRandom(seedKey, `leaf:${idx}:keep`);
+      if (keepRoll > keepProb) return;
+
+      const sizeRand = seededRandom(seedKey, `leaf:${idx}:size`);
+      const alphaRand = seededRandom(seedKey, `leaf:${idx}:alpha`);
+      const jitterX = (seededRandom(seedKey, `leaf:${idx}:jx`) - 0.5) * 6;
+      const jitterY = (seededRandom(seedKey, `leaf:${idx}:jy`) - 0.5) * 6;
+      const color = palette[Math.floor(seededRandom(seedKey, `leaf:${idx}:c`) * palette.length)];
+
+      const weight = clamp(pt.w || 1, 0.5, 1.5);
+      const mult = state === "BURST" ? burstMult : trunkMult;
+      const size = clamp(basePx * (0.8 + 0.6 * sizeRand) * weight * mult, 0.6, 3.2);
+      const alpha = 0.25 + 0.2 * alphaRand;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.ellipse(pt.x + jitterX, pt.y + jitterY, size * 1.2, size, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+  // END PATCH
+
+  const FOREST_ENGINE = "v01";
+  // BEGIN PATCH: debug defaults for fast validation
+  const DEBUG_FOREST = {
+    enabled: true,
+    showCells: true,
+    showBBoxes: false,
+    maxInternodePx: 6,
+    nodeSpacingPx: 10,
+    cellPadding: 18
+  };
+  const DEBUG_SCALE = false;
+  // END PATCH
+
+  const METRICS = {
+    enabled: true,
+    toConsole: true,
+    toPanel: true,
+    panelId: "forestMetricsPanel",
+    reportEveryNFrames: 1,
+    warn: {
+      spreadEps: 1e-3,
+      widthCapDominanceRatio: 0.90,
+      bboxMinHpx: 10
+    }
+  };
+  const TRUNK_GRAV = 0.06;
+  const TRUNK_VISIBLE = false;
+  const STROKE_BASE_PX = 0.85;
+  const STROKE_MIN_PX = 0.35;
+  const GEN_VERSION = 1;
+
+  
+  // ---------- Forest v01 (segments-only, deterministic, uniform scale) ----------
+  const BLUEPRINT_CANVAS_W = 1200;
+  const BLUEPRINT_CANVAS_H = 800;
+  const V01_VERSION = 1;
+  const MIN_STEPS = 120;
+  const MAX_STEPS = 3200;
+  const TOP_PAD = 16;
+  const BOTTOM_PAD = 10;
+
+  if (typeof window !== "undefined") {
+    window.V01_DEBUG_DISABLE_OCC = window.V01_DEBUG_DISABLE_OCC || false;
+    window.V01_DEBUG_DISABLE_TIER = window.V01_DEBUG_DISABLE_TIER || false;
+    window.V01_DEBUG_DISABLE_CONE = window.V01_DEBUG_DISABLE_CONE || false;
+    window.V01_DEBUG_DISABLE_DENSITYCAP = window.V01_DEBUG_DISABLE_DENSITYCAP || false;
+    window.V01_DEBUG_DISABLE_SANITIZE_REDO = window.V01_DEBUG_DISABLE_SANITIZE_REDO || false;
+    window.V01_DEBUG_DISABLE_COOLDOWN = window.V01_DEBUG_DISABLE_COOLDOWN || false;
+    window.V01_DEBUG_SPAWN_HISTO = window.V01_DEBUG_SPAWN_HISTO || false;
+  }
+
+  function getV01DebugFlag(name) {
+    if (typeof window === "undefined") return false;
+    return !!window[name];
+  }
+
+  function clamp01(v) { return clamp(v, 0, 1); }
+
+  function forestSignalsHash(obj) {
+    if (!obj) return "0";
+    const keys = Object.keys(obj).sort();
+    const parts = [];
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === "number") parts.push(`${k}:${v.toFixed(4)}`);
+      else parts.push(`${k}:${String(v)}`);
+    }
+    return String(hashString(parts.join("|")));
+  }
+
+  function getForestV01Store() {
+    state.forest = state.forest || {};
+    state.forest.v01 = state.forest.v01 || { version: V01_VERSION, snapshots: {}, lastMetrics: null };
+    if (state.forest.v01.version !== V01_VERSION) {
+      state.forest.v01.version = V01_VERSION;
+      state.forest.v01.snapshots = {};
+      state.forest.v01.lastMetrics = null;
+    }
+    return state.forest.v01;
+  }
+
+  function getV01Snapshot(weekId, ck, dayKey) {
+    const store = getForestV01Store();
+    const week = store.snapshots[weekId];
+    const course = week?.courses?.[ck];
+    return course?.days?.[dayKey] || null;
+  }
+
+  function setV01Snapshot(weekId, ck, dayKey, snap) {
+    const store = getForestV01Store();
+    store.snapshots[weekId] = store.snapshots[weekId] || { courses: {} };
+    store.snapshots[weekId].courses[ck] = store.snapshots[weekId].courses[ck] || { days: {} };
+    store.snapshots[weekId].courses[ck].days[dayKey] = snap;
+  }
+
+  const geomCacheV01 = new Map();
+
+  function getGeomCacheKeyV01({ ck, weekId, dayKey, modeKey, simulateMax, signalsHash }) {
+    return ["v01", ck, weekId, dayKey, modeKey, simulateMax ? 1 : 0, signalsHash || "0"].join("|");
+  }
+
+  function rotateVec(v, ang) {
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    return { x: v.x * c - v.y * s, y: v.x * s + v.y * c };
+  }
+
+  function lerpVec(a, b, t) {
+    return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
+  }
+
+  function clampAngleToCone(a, cone) {
+    const up = -Math.PI / 2;
+    const minA = up - cone;
+    const maxA = up + cone;
+    const d = angleDelta(up, a);
+    const clamped = clamp(d, -cone, cone);
+    return up + clamped;
+  }
+
+  function clampDirToCone(v, cone) {
+    const a = Math.atan2(v.y, v.x);
+    const clamped = clampAngleToCone(a, cone);
+    return { x: Math.cos(clamped), y: Math.sin(clamped) };
+  }
+
+  function computeSegmentsBounds(segments) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const s of segments) {
+      if (!s) continue;
+      minX = Math.min(minX, s.x1, s.x2);
+      minY = Math.min(minY, s.y1, s.y2);
+      maxX = Math.max(maxX, s.x1, s.x2);
+      maxY = Math.max(maxY, s.y1, s.y2);
+    }
+    if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1, maxY: 1, width: 1, height: 1 };
+    return { minX, minY, maxX, maxY, width: Math.max(1e-6, maxX - minX), height: Math.max(1e-6, maxY - minY) };
+  }
+
+  function sanitizeSegments(segments, observedMaxDepth, opts = {}) {
+    const minLenBase = opts.minLenBase ?? 0.6;
+    const minLenEnd = opts.minLenEnd ?? 1.8;
+    const depthBins = 8;
+    const segKeptCountByDepth = Array(depthBins).fill(0);
+    const segKeptLenSumByDepth = Array(depthBins).fill(0);
+    const clean = [];
+    let minLenBaseUsed = minLenBase;
+
+    const keepPass = (scale = 1) => {
+      clean.length = 0;
+      segKeptCountByDepth.fill(0);
+      segKeptLenSumByDepth.fill(0);
+      for (const s of segments) {
+        if (!s) continue;
+        const x1 = s.x1, y1 = s.y1, x2 = s.x2, y2 = s.y2;
+        if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) continue;
+        const len = Number.isFinite(s.len) ? s.len : Math.hypot(x2 - x1, y2 - y1);
+        const d = Math.max(0, Number.isFinite(s.depth) ? s.depth : 0);
+        const dN = observedMaxDepth > 0 ? clamp(d / observedMaxDepth, 0, 1) : 0;
+        const minLen = lerp(minLenBase, minLenEnd, dN) * scale;
+        if (len < minLen) continue;
+        const db = Math.min(depthBins - 1, Math.floor(dN * depthBins));
+        segKeptCountByDepth[db] += 1;
+        segKeptLenSumByDepth[db] += len;
+        clean.push({ ...s, len });
+      }
+    };
+
+    keepPass(1);
+    const segGen = segments.length;
+    const minKeep = Math.max(40, Math.floor(segGen * 0.55));
+    let sanitizeRedo = false;
+    let redoTriggered = false;
+    if (clean.length < minKeep && segments.length) {
+      sanitizeRedo = true;
+      redoTriggered = true;
+      keepPass(0.65);
+      minLenBaseUsed = minLenBase * 0.65;
+      if (clean.length < minKeep) {
+        const sorted = [...segments].filter(Boolean).map((s) => {
+          const len = Number.isFinite(s.len) ? s.len : Math.hypot(s.x2 - s.x1, s.y2 - s.y1);
+          return { ...s, len };
+        }).sort((a, b) => b.len - a.len);
+        clean.length = 0;
+        const K = Math.max(40, Math.floor(segGen * 0.65));
+        for (let i = 0; i < Math.min(K, sorted.length); i++) clean.push(sorted[i]);
+      }
+    }
+
+    let densityCapApplied = false;
+    let hardCapSegmentsUsed = false;
+    if (opts.densityCap && !getV01DebugFlag("V01_DEBUG_DISABLE_DENSITYCAP")) {
+      densityCapApplied = true;
+      const depthBinsCap = 10;
+      const yBinsCap = 8;
+      const buckets = new Map();
+      for (const s of clean) {
+        const d = Math.max(0, Number.isFinite(s.depth) ? s.depth : 0);
+        const dN = observedMaxDepth > 0 ? clamp(d / observedMaxDepth, 0, 1) : 0;
+        const db = Math.min(depthBinsCap - 1, Math.floor(dN * depthBinsCap));
+        const yN = clamp((s.y2 + BLUEPRINT_CANVAS_H) / (2 * BLUEPRINT_CANVAS_H), 0, 1);
+        const yb = Math.min(yBinsCap - 1, Math.floor(yN * yBinsCap));
+        const key = `${db}|${yb}`;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(s);
+      }
+      const capped = [];
+      buckets.forEach((list) => {
+        list.sort((a, b) => (b.len || 0) - (a.len || 0));
+        const keepN = Math.max(6, Math.floor(list.length * 0.5));
+        capped.push(...list.slice(0, keepN));
+      });
+      clean.length = 0;
+      clean.push(...capped);
+      hardCapSegmentsUsed = true;
+    }
+
+    const segKeptAvgLenByDepth = segKeptCountByDepth.map((c, i) => c ? (segKeptLenSumByDepth[i] / c) : 0);
+    return { segments: clean, segKeptCountByDepth, segKeptAvgLenByDepth, sanitizeRedo, redoTriggered, hardCapSegmentsUsed, densityCapApplied, minLenBaseUsed };
+  }
+
+  function computeSegmentStats(segments) {
+    let total = 0;
+    let horiz = 0;
+    let up = 0;
+    segments.forEach((s) => {
+      const dx = s.x2 - s.x1;
+      const dy = s.y2 - s.y1;
+      const len = Math.hypot(dx, dy);
+      if (len <= 0) return;
+      total += len;
+      if (Math.abs(dy) < 0.15 * len) horiz += len;
+      if (dy < 0) up += len;
+    });
+    return { totalLen: total, horizFrac: total > 0 ? horiz / total : 0, upFrac: total > 0 ? up / total : 0 };
+  }
+
+  function stepRand(seedKey, step, salt = "") {
+    const h = hashString(`${seedKey}|${salt}|${step}`) >>> 0;
+    return (h % 100000) / 100000;
+  }
+
+  function generateSegmentsTreeV01(seedKey, params) {
+    const growthRel = clamp(params.growthRel ?? 0, 0, 1);
+    const isSimMax = !!(params?.simulateMax || params?.__simulateMax);
+    const disableOcc = getV01DebugFlag("V01_DEBUG_DISABLE_OCC");
+    const disableTier = getV01DebugFlag("V01_DEBUG_DISABLE_TIER");
+    const disableCone = getV01DebugFlag("V01_DEBUG_DISABLE_CONE");
+    const disableCooldown = getV01DebugFlag("V01_DEBUG_DISABLE_COOLDOWN");
+    const spawnDebug = getV01DebugFlag("V01_DEBUG_SPAWN_HISTO");
+    let maxSteps = Math.max(1, Math.round(params.maxSteps || MIN_STEPS));
+    const baseLen = lerp(12, 16, growthRel);
+    const decay = lerp(0.97, 0.92, growthRel);
+    const tropism = lerp(0.08, 0.18, growthRel);
+    const jitterDeg = lerp(2, 8, growthRel);
+    const trunkSteps = Math.round(lerp(12, 24, clamp(maxSteps / MAX_STEPS, 0, 1)));
+    const minBranchStep = Math.max(4, Math.floor(trunkSteps * 0.35));
+    const coneRad = 25 * (Math.PI / 180);
+    let branchProb = lerp(0.08, 0.22, growthRel);
+    const maxDepth = Math.round(lerp(2, 4, growthRel));
+    let baseBranchSteps = Math.round(lerp(10, 26, growthRel));
+    const driftPhase = ((hashString(`${seedKey}|drift`) % 1000) / 1000) * Math.PI * 2;
+    const driftPeriod = lerp(180, 320, growthRel);
+    const driftAmp = lerp(0.008, 0.02, growthRel);
+    const conePrimary = 50 * (Math.PI / 180);
+    const coneTwig = 70 * (Math.PI / 180);
+    const finalCone = 80 * (Math.PI / 180);
+    const wind = {
+      baseTurnRate: 0.04,
+      noiseAmp: 0.22,
+      noiseScale: 16,
+      headingInertiaK: 0.18,
+      boundaryBand: 50,
+      boundaryGain: 0.9,
+      occCellSize: 12,
+      occGain: 0.6,
+      occDecay: 0.08
+    };
+    const canvasW = BLUEPRINT_CANVAS_W;
+    const canvasH = BLUEPRINT_CANVAS_H;
+    const baseX = canvasW * 0.5;
+    const baseY = canvasH * 0.65;
+    const canopyTop = canvasH * 0.18;
+    const occ = makeOccGrid(canvasW, canvasH, wind.occCellSize);
+    const trunkTierEvery = Math.round(10 + (14 - 10) * seededRandom(seedKey || "", "v01-trunk-tier"));
+    const tierEventsMax = isSimMax ? 3 : (growthRel >= 0.75 ? 2 : 1);
+    const noSignal = !!params.noSignal;
+    if (noSignal && !isSimMax) {
+      maxSteps = Math.min(maxSteps, 4);
+      branchProb = 0.0;
+      baseBranchSteps = 0;
+    }
+
+    const depthBins = 8;
+    const yBins = 8;
+    const spawnBins = 24;
+    const spawnHistogram = spawnDebug ? Array(spawnBins).fill(0) : null;
+    const spawnAttemptsByBin = spawnDebug ? Array(spawnBins).fill(0) : null;
+    const spawnRejects = spawnDebug ? { cooldown: 0, tierCap: 0, budget: 0, tierDisabled: 0, coneClamp: 0, occ: 0, densityCap: 0 } : null;
+    let spawnAccepted = 0;
+    let spawnAttempts = 0;
+    const spawnSeen = new Set();
+    let spawnSeenCount = 0;
+    let tierSpawnsBlocked = 0;
+    const spawnKey = (depthVal, yVal) => {
+      const dN = maxDepth > 0 ? clamp(depthVal / maxDepth, 0, 1) : 0;
+      const yN = clamp(yVal / Math.max(1, canvasH), 0, 1);
+      const db = Math.min(depthBins - 1, Math.floor(dN * depthBins));
+      const yb = Math.min(yBins - 1, Math.floor(yN * yBins));
+      return `${db}|${yb}`;
+    };
+    const markSpawn = (db, yb) => {
+      if (db < 0 || db >= depthBins || yb < 0 || yb >= yBins) return;
+      const key = `${db}|${yb}`;
+      if (!spawnSeen.has(key)) {
+        spawnSeen.add(key);
+        spawnSeenCount += 1;
+      }
+    };
+    const canSpawnHere = (depthVal, yVal, branchId, stepIndex) => {
+      const key = spawnKey(depthVal, yVal);
+      if (!key) return false;
+      const [dbStr, ybStr] = key.split("|");
+      const db = Number(dbStr);
+      const yb = Number(ybStr);
+      const dN = maxDepth > 0 ? clamp(depthVal / maxDepth, 0, 1) : 0;
+      const overrideBase = isSimMax ? 0.18 : 0.12;
+      const overrideMax = isSimMax ? 0.45 : 0.32;
+      const overrideProb = lerp(overrideBase, overrideMax, Math.pow(dN, 0.7));
+      if (disableCooldown) {
+        markSpawn(db, yb);
+        return true;
+      }
+      let blocked = spawnSeen.has(key);
+      if (blocked) {
+        const roll = stepRand(`${seedKey}|${branchId||0}`, stepIndex || 0, "spawn-override");
+        if (roll >= overrideProb) return false;
+        markSpawn(db, yb);
+        return true;
+      }
+      markSpawn(db, yb);
+      return true;
+    };
+    const recordSpawn = (yVal, depthVal, accepted, reasons = {}) => {
+      if (!spawnDebug) return;
+      if (!Number.isFinite(yVal)) return;
+      const yN = clamp(yVal / Math.max(1, canvasH), 0, 1);
+      const bin = Math.min(spawnBins - 1, Math.floor(yN * spawnBins));
+      spawnAttempts += 1;
+      if (spawnAttemptsByBin) spawnAttemptsByBin[bin] += 1;
+      if (accepted) {
+        spawnAccepted += 1;
+        if (spawnHistogram) spawnHistogram[bin] += 1;
+      } else if (spawnRejects) {
+        Object.keys(reasons).forEach((k) => {
+          if (reasons[k]) spawnRejects[k] = (spawnRejects[k] || 0) + 1;
+        });
+      }
+    };
+
+    const segments = [];
+    let branchEvents = 0;
+    let branchesPushed = 0;
+    let branchSpawns = 0;
+    let stackMax = 0;
+    let depthMaxReached = 0;
+    let pops = 0;
+    let angVelSumSq = 0;
+    let angVelCount = 0;
+    let boundaryHits = 0;
+    let occHits = 0;
+    let boundaryAppliedCount = 0;
+    let occAppliedCount = 0;
+    let tierEventsFired = 0;
+
+    const segGenCountByDepth = Array(depthBins).fill(0);
+    const segGenLenSumByDepth = Array(depthBins).fill(0);
+    const segGenSinSumByDepth = Array(depthBins).fill(0);
+    const segGenCosSumByDepth = Array(depthBins).fill(0);
+
+    const up = { x: 0, y: -1 };
+    const jitterRad = (jitterDeg * Math.PI) / 180;
+    let branchSerial = 0;
+    let trunkStepIndex = 0;
+    let budgetLeft = maxSteps;
+    let stepIndex = 0;
+
+    let state = { x: 0, y: 0, dir: { x: 0, y: -1 }, depth: 0, stepsLeft: maxSteps, angVel: 0, branchId: 0, parentId: null };
+    const stack = [];
+
+    while (budgetLeft > 0 && state) {
+      if (state.stepsLeft <= 0) {
+        pops += 1;
+        state = stack.pop();
+        continue;
+      }
+      const depth = Math.max(0, Number.isFinite(state.depth) ? Math.floor(state.depth) : 0);
+      state.depth = depth;
+      let dir = state.dir;
+      dir = lerpVec(dir, up, tropism);
+      const noise = (stepRand(`${seedKey}|${state.branchId}`, stepIndex + depth * 1000, "noise") * 2 - 1) * jitterRad;
+      state.angVel = 0.85 * state.angVel + 0.15 * noise;
+      dir = rotateVec(dir, state.angVel);
+      const drift = Math.sin((stepIndex / driftPeriod) * Math.PI * 2 + driftPhase) * driftAmp;
+      dir = rotateVec(dir, drift);
+      let stepLen = baseLen * Math.pow(decay, depth);
+      const dN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+      const stepBoost = isSimMax ? lerp(1.0, 1.8, Math.pow(dN, 1.1)) : lerp(1.0, 1.3, Math.pow(dN, 1.1));
+      stepLen *= stepBoost;
+      const minStep = isSimMax ? lerp(0.8, 2.0, dN) : lerp(0.6, 1.4, dN);
+      stepLen = Math.max(stepLen, minStep);
+      let dirAngle = Math.atan2(dir.y, dir.x);
+      const xC = state.x + baseX;
+      const yC = state.y + baseY;
+      const baseTurn = (stepRand(`${seedKey}|${state.branchId}`, stepIndex, "baseTurn") * 2 - 1) * wind.baseTurnRate;
+      const noiseTurn = noise1D(seedKey, state.branchId || 0, stepIndex, wind.noiseScale) * wind.noiseAmp;
+      const topEdge = yC;
+      const minDist = topEdge;
+      const band = Math.max(1, wind.boundaryBand || 1);
+      const mN = clamp((band - minDist) / band, 0, 1);
+      const depthN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+      const steerGain = lerp(1.0, 0.35, Math.pow(depthN, 0.8));
+      const maxSteer = (depth === 0 ? (6 * (Math.PI / 180)) : (10 * (Math.PI / 180)));
+      let boundary = 0;
+      if (mN > 0.35) {
+        boundary = boundaryTurn(dirAngle, xC, yC, canvasW, canvasH, wind.boundaryBand, wind.boundaryGain);
+        boundary = clamp(boundary, -maxSteer, maxSteer) * steerGain * 0.65;
+      }
+      const boundaryAppliedThisStep = Math.abs(boundary) > 1e-4;
+      if (boundaryAppliedThisStep) {
+        boundaryHits += 1;
+        boundaryAppliedCount += 1;
+      }
+      let densityBias = 0;
+      if (!disableOcc) {
+        const forward = occSample(occ, xC + Math.cos(dirAngle) * stepLen * 1.5, yC + Math.sin(dirAngle) * stepLen * 1.5);
+        const left = occSample(occ, xC + Math.cos(dirAngle - Math.PI / 4) * stepLen * 1.2, yC + Math.sin(dirAngle - Math.PI / 4) * stepLen * 1.2);
+        const right = occSample(occ, xC + Math.cos(dirAngle + Math.PI / 4) * stepLen * 1.2, yC + Math.sin(dirAngle + Math.PI / 4) * stepLen * 1.2);
+        const occLevel = Math.max(forward, left, right);
+        if (occLevel > 0.25) {
+          densityBias = (right - left) * -wind.occGain * (1 + forward * 0.2);
+          densityBias = clamp(densityBias, -maxSteer, maxSteer) * steerGain;
+        }
+      }
+      const occAppliedThisStep = Math.abs(densityBias) > 1e-4;
+      if (occAppliedThisStep) {
+        occHits += 1;
+        occAppliedCount += 1;
+      }
+      let desiredAngle = dirAngle + baseTurn + noiseTurn + boundary + densityBias;
+      if (!disableCone) {
+        desiredAngle = clampAngleToCone(desiredAngle, finalCone);
+      }
+      const desiredDir = { x: Math.cos(desiredAngle), y: Math.sin(desiredAngle) };
+      dir = lerpVec(dir, desiredDir, wind.headingInertiaK);
+      dirAngle = Math.atan2(dir.y, dir.x);
+      angVelSumSq += state.angVel * state.angVel;
+      angVelCount += 1;
+      if (!disableCone && stepIndex < trunkSteps && depth === 0) {
+        dir = clampDirToCone(dir, coneRad);
+        dirAngle = Math.atan2(dir.y, dir.x);
+      }
+      if (Math.abs(dir.y) < 0.15) {
+        dir = lerpVec(dir, up, 0.65);
+        dirAngle = Math.atan2(dir.y, dir.x);
+      }
+
+      let nx = state.x + dir.x * stepLen;
+      let ny = state.y + dir.y * stepLen;
+      const nxC = nx + baseX;
+      const nyC = ny + baseY;
+      if (nxC < 8 || nxC > canvasW - 8 || nyC < 8 || nyC > canvasH - 8) {
+        const toward = Math.atan2(baseY - yC, baseX - xC);
+        const adjust = angleDelta(dirAngle, toward) * 0.65;
+        dir = rotateVec(dir, adjust);
+        dirAngle = Math.atan2(dir.y, dir.x);
+        nx = state.x + dir.x * stepLen * 0.75;
+        ny = state.y + dir.y * stepLen * 0.75;
+        boundaryHits += 1;
+        boundaryAppliedCount += 1;
+      }
+
+      const len = Math.hypot(nx - state.x, ny - state.y);
+      segments.push({ x1: state.x, y1: state.y, x2: nx, y2: ny, depth, branchId: state.branchId, parentId: state.parentId, len });
+      const dbi = Math.min(depthBins - 1, Math.floor(dN * depthBins));
+      segGenCountByDepth[dbi] += 1;
+      segGenLenSumByDepth[dbi] += len;
+      segGenSinSumByDepth[dbi] += Math.sin(dirAngle);
+      segGenCosSumByDepth[dbi] += Math.cos(dirAngle);
+      state.x = nx;
+      state.y = ny;
+      state.dir = dir;
+      state.stepsLeft -= 1;
+      budgetLeft -= 1;
+      occStamp(occ, nx + baseX, ny + baseY, wind.occDecay);
+      if (depth === 0) trunkStepIndex += 1;
+
+      let branchedNow = false;
+      const tierEligible = !noSignal && depth === 0 && yC > (canopyTop + 0.08 * canvasH)
+        && trunkTierEvery > 0 && trunkStepIndex > 0 && (trunkStepIndex % trunkTierEvery === 0) && maxDepth > 0;
+      if (tierEligible) {
+        if (disableTier) {
+          recordSpawn(yC, depth, false, { tierDisabled: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+        } else if (tierEventsFired >= tierEventsMax) {
+          recordSpawn(yC, depth, false, { tierCap: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+        } else if (budgetLeft <= 6) {
+          recordSpawn(yC, depth, false, { budget: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+        } else if (!canSpawnHere(depth, yC, state.branchId, stepIndex)) {
+          tierSpawnsBlocked += 1;
+          recordSpawn(yC, depth, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+        } else {
+          const tierTheta = (18 + 12 * seededRandom(seedKey || "", `v01-tier-theta:${trunkStepIndex}`)) * (Math.PI / 180);
+          const tierLenScale = 0.35 + 0.2 * seededRandom(seedKey || "", `v01-tier-len:${trunkStepIndex}`);
+          const tierSteps = 2 + Math.floor(seededRandom(seedKey || "", `v01-tier-steps:${trunkStepIndex}`) * 2);
+          const bSteps = clamp(Math.round(tierSteps * tierLenScale), 2, Math.floor(0.15 * maxSteps));
+          const trunkState = { x: state.x, y: state.y, dir, depth, stepsLeft: state.stepsLeft, angVel: state.angVel, branchId: state.branchId, parentId: state.parentId };
+          const branchAId = ++branchSerial;
+          const branchBId = ++branchSerial;
+          const branchCone = (depth === 0) ? conePrimary : coneTwig;
+          const branchADir = rotateVec(dir, tierTheta);
+          const branchATheta = disableCone ? Math.atan2(branchADir.y, branchADir.x) : clampAngleToCone(Math.atan2(branchADir.y, branchADir.x), branchCone);
+          const branchBDir = rotateVec(dir, -tierTheta);
+          const branchBTheta = disableCone ? Math.atan2(branchBDir.y, branchBDir.x) : clampAngleToCone(Math.atan2(branchBDir.y, branchBDir.x), branchCone);
+          const branchA = { x: state.x, y: state.y, dir: { x: Math.cos(branchATheta), y: Math.sin(branchATheta) }, depth: depth + 1, stepsLeft: bSteps, angVel: state.angVel * 0.5, branchId: branchAId, parentId: state.branchId };
+          const branchB = { x: state.x, y: state.y, dir: { x: Math.cos(branchBTheta), y: Math.sin(branchBTheta) }, depth: depth + 1, stepsLeft: bSteps, angVel: state.angVel * 0.5, branchId: branchBId, parentId: state.branchId };
+          stack.push(trunkState);
+          stack.push(branchB);
+          branchesPushed += 2;
+          branchSpawns += 2;
+          branchEvents += 2;
+          tierEventsFired += 1;
+          stackMax = Math.max(stackMax, stack.length);
+          state = branchA;
+          depthMaxReached = Math.max(depthMaxReached, state.depth);
+          branchedNow = true;
+          recordSpawn(yC, depth, true);
+        }
+      }
+
+      if (!branchedNow && !noSignal && stepIndex >= minBranchStep && depth < maxDepth && budgetLeft > 0) {
+        const trunkProgress = clamp(trunkStepIndex / Math.max(1, trunkSteps), 0, 1);
+        const trunkRamp = smoothstep(0.7, 1.0, trunkProgress);
+        const apicalScale = 0.15 + 0.85 * trunkRamp;
+        const depthN2 = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+        const tierMul = depthN2 < 0.33 ? 0.7 : (depthN2 < 0.66 ? 1.0 : 0.55);
+        const branchProbEff = branchProb * tierMul * apicalScale;
+        const trunkGate = clamp(trunkStepIndex / Math.max(1, trunkSteps), 0, 1);
+        const allowProb = smoothstep(0.05, 1.0, trunkGate);
+        const r = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branch");
+        const forceBranch = (!noSignal && growthRel > 0.2 && branchEvents < 2 && (stepIndex === minBranchStep + 8 || stepIndex === minBranchStep + 22));
+        if ((r < branchProbEff * allowProb) || forceBranch) {
+          if (!canSpawnHere(depth + 1, yC, state.branchId, stepIndex)) {
+            tierSpawnsBlocked += 1;
+            recordSpawn(yC, depth + 1, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+          } else {
+            branchEvents += 1;
+            const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branchSign") < 0.5 ? -1 : 1;
+            const bAng = lerp(18, 32, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branchAng")) * (Math.PI / 180);
+            const bDirRaw = rotateVec(dir, sign * bAng);
+            const branchCone = (depth === 0) ? conePrimary : coneTwig;
+            const bTheta = disableCone ? Math.atan2(bDirRaw.y, bDirRaw.x) : clampAngleToCone(Math.atan2(bDirRaw.y, bDirRaw.x), branchCone);
+            const bDir = { x: Math.cos(bTheta), y: Math.sin(bTheta) };
+            const bStepsRaw = Math.round(baseBranchSteps * Math.pow(0.72, depth));
+            const bSteps = clamp(bStepsRaw, 8, Math.floor(0.35 * maxSteps));
+            const trunkState = { x: state.x, y: state.y, dir, depth, stepsLeft: state.stepsLeft, angVel: state.angVel, branchId: state.branchId, parentId: state.parentId };
+            stack.push(trunkState);
+            branchesPushed += 1;
+            branchSpawns += 1;
+            stackMax = Math.max(stackMax, stack.length);
+            const newBranchId = ++branchSerial;
+            state = { x: state.x, y: state.y, dir: bDir, depth: depth + 1, stepsLeft: bSteps, angVel: state.angVel * 0.5, branchId: newBranchId, parentId: state.branchId };
+            depthMaxReached = Math.max(depthMaxReached, state.depth);
+            branchedNow = true;
+            recordSpawn(yC, depth + 1, true);
+          }
+        }
+      }
+
+      if (!branchedNow && state.stepsLeft <= 0) {
+        pops += 1;
+        state = stack.pop();
+      }
+      stepIndex += 1;
+    }
+
+    const segGenAvgLenByDepth = segGenCountByDepth.map((count, i) => count ? (segGenLenSumByDepth[i] / count) : 0);
+    const segGenAngleMeanByDepth = segGenCountByDepth.map((count, i) => count ? Math.atan2(segGenSinSumByDepth[i], segGenCosSumByDepth[i]) : 0);
+    const segGenAngleStdByDepth = segGenCountByDepth.map((count, i) => {
+      if (!count) return 0;
+      const R = Math.hypot(segGenSinSumByDepth[i], segGenCosSumByDepth[i]) / count;
+      return Math.sqrt(Math.max(0, -2 * Math.log(Math.max(1e-6, R))));
+    });
+    const spawnReport = spawnDebug ? {
+      bins: spawnHistogram || [],
+      attemptsByBin: spawnAttemptsByBin || [],
+      rejects: spawnRejects || {},
+      total: spawnAccepted,
+      attempts: spawnAttempts,
+      depthBins,
+      yBins,
+      spawnBins
+    } : null;
+
+    return {
+      segments,
+      meta: {
+        branchEvents,
+        branchesPushed,
+        branchSpawns,
+        pops,
+        stackMax,
+        depthMaxReached,
+        maxDepth,
+        angVelRMS: angVelCount ? Math.sqrt(angVelSumSq / angVelCount) : 0,
+        boundaryHits,
+        occHits,
+        rng: "seeded",
+        tierEventsFired,
+        tierEventsMax,
+        tierSpawnsBlocked,
+        spawnSeenCount,
+        spawnBlocked: tierSpawnsBlocked,
+        boundaryAppliedCount,
+        occAppliedCount,
+        segGenCountByDepth,
+        segGenAvgLenByDepth,
+        segGenAngleMeanByDepth,
+        segGenAngleStdByDepth,
+        spawnReport
+      }
+    };
+  }
+
+  function generateGeomV01({ course, label, seedKey, signals, params, simulateMax }) {
+    const gen = generateSegmentsTreeV01(seedKey, params);
+    const rawSegments = gen.segments || [];
+    const segmentsBeforeSanitize = rawSegments.length;
+    let observedMaxDepth = 0;
+    let missingDepth = false;
+    rawSegments.forEach((s) => {
+      if (!s || !Number.isFinite(s.depth)) missingDepth = true;
+      else observedMaxDepth = Math.max(observedMaxDepth, s.depth);
+    });
+    if (missingDepth && DEBUG_FOREST?.enabled) {
+      console.warn("[V01Depth] missing depth on segments", { seedKey, count: rawSegments.length });
+    }
+    const sanitized = sanitizeSegments(rawSegments, observedMaxDepth, { minLenBase: 0.6, minLenEnd: 1.8, densityCap: !!simulateMax });
+    const clean = sanitized.segments;
+    const segmentsAfterSanitize = clean.length;
+    let minSegLenKept = Infinity;
+    let segLenSum = 0;
+    let missingBranchId = false;
+    let missingLen = false;
+    const branchIds = new Set();
+    clean.forEach((s) => {
+      const len = Number.isFinite(s.len) ? s.len : Math.hypot(s.x2 - s.x1, s.y2 - s.y1);
+      if (!Number.isFinite(s.len)) missingLen = true;
+      const bid = Number.isFinite(s.branchId) ? s.branchId : 0;
+      if (!Number.isFinite(s.branchId)) missingBranchId = true;
+      branchIds.add(bid);
+      if (len < minSegLenKept) minSegLenKept = len;
+      segLenSum += len;
+    });
+    if ((missingBranchId || missingLen) && DEBUG_FOREST?.enabled) {
+      console.warn("[V01Segments] missing meta on segments", { seedKey, missingBranchId, missingLen });
+    }
+    const avgSegLen = clean.length ? (segLenSum / clean.length) : 0;
+    const branchIdCount = branchIds.size;
+
+    const metaBase = {
+      maxStepsUsed: params.maxSteps,
+      source: "regen",
+      __simulateMax: !!(params.simulateMax || params.__simulateMax),
+      branchEvents: gen.meta?.branchEvents ?? 0,
+      branchesPushed: gen.meta?.branchesPushed ?? 0,
+      branchSpawns: gen.meta?.branchSpawns ?? 0,
+      pops: gen.meta?.pops ?? 0,
+      stackMax: gen.meta?.stackMax ?? 0,
+      depthMaxReached: gen.meta?.depthMaxReached ?? 0,
+      maxDepth: gen.meta?.maxDepth ?? 0,
+      observedMaxDepth,
+      angVelRMS: gen.meta?.angVelRMS ?? 0,
+      boundaryHits: gen.meta?.boundaryHits ?? 0,
+      occHits: gen.meta?.occHits ?? 0,
+      boundaryAppliedCount: gen.meta?.boundaryAppliedCount ?? gen.meta?.boundaryHits ?? 0,
+      occAppliedCount: gen.meta?.occAppliedCount ?? gen.meta?.occHits ?? 0,
+      rng: gen.meta?.rng ?? "seeded",
+      tierEventsFired: gen.meta?.tierEventsFired ?? 0,
+      tierEventsMax: gen.meta?.tierEventsMax ?? 0,
+      tierSpawnsBlocked: gen.meta?.tierSpawnsBlocked ?? 0,
+      spawnSeenCount: gen.meta?.spawnSeenCount ?? 0,
+      spawnBlocked: gen.meta?.spawnBlocked ?? gen.meta?.tierSpawnsBlocked ?? 0,
+      segGenCountByDepth: gen.meta?.segGenCountByDepth || [],
+      segGenAvgLenByDepth: gen.meta?.segGenAvgLenByDepth || [],
+      segGenAngleMeanByDepth: gen.meta?.segGenAngleMeanByDepth || [],
+      segGenAngleStdByDepth: gen.meta?.segGenAngleStdByDepth || [],
+      spawnReport: gen.meta?.spawnReport || null,
+      branchIdCount,
+      segmentsBeforeSanitize,
+      segmentsAfterSanitize,
+      segBefore: segmentsBeforeSanitize,
+      segAfter: segmentsAfterSanitize,
+      avgSegLen,
+      minSegLenKept: Number.isFinite(minSegLenKept) ? minSegLenKept : 0,
+      segKept: segmentsAfterSanitize,
+      segGen: segmentsBeforeSanitize,
+      sanitizeRedo: !!sanitized.sanitizeRedo,
+      redoTriggered: !!sanitized.redoTriggered,
+      hardCapSegmentsUsed: !!sanitized.hardCapSegmentsUsed,
+      densityCapApplied: !!sanitized.densityCapApplied,
+      segKeptCountByDepth: sanitized.segKeptCountByDepth || [],
+      segKeptAvgLenByDepth: sanitized.segKeptAvgLenByDepth || [],
+      minLenBaseUsed: sanitized.minLenBaseUsed ?? 0
+    };
+    if (metaBase.spawnReport) {
+      metaBase.spawnReport.densityCapApplied = !!sanitized.densityCapApplied;
+      if (metaBase.spawnReport.rejects) metaBase.spawnReport.rejects.densityCap = sanitized.densityCapApplied ? 1 : 0;
+    }
+    if (!clean.length) {
+      return { segments: makeFallbackSegments(seedKey), meta: { ...metaBase, source: "fallback" } };
+    }
+    return { segments: clean, meta: metaBase };
+  }
+
+  function makeFallbackSegments(seedKey) {
+    const rng = makeRng(seedKey || "fallback");
+    const trunkLen = 70 + rng() * 40;
+    const branchLen = 28 + rng() * 18;
+    const twigLen = 18 + rng() * 12;
+    const ang = 0.35 + rng() * 0.35;
+    const ang2 = 0.45 + rng() * 0.35;
+    const midY = -trunkLen * 0.55;
+    const topY = -trunkLen;
+    const segs = [
+      { x1: 0, y1: 0, x2: 0, y2: -trunkLen },
+      { x1: 0, y1: midY, x2: Math.cos(-Math.PI / 2 + ang) * branchLen, y2: Math.sin(-Math.PI / 2 + ang) * branchLen + midY },
+      { x1: 0, y1: midY, x2: Math.cos(-Math.PI / 2 - ang2) * branchLen * 0.9, y2: Math.sin(-Math.PI / 2 - ang2) * branchLen * 0.9 + midY },
+      { x1: 0, y1: topY, x2: Math.cos(-Math.PI / 2 + ang * 0.6) * twigLen, y2: Math.sin(-Math.PI / 2 + ang * 0.6) * twigLen + topY }
+    ];
+    return segs.map((s) => ({ ...s, depth: 0, branchId: 0, parentId: null, len: Math.hypot(s.x2 - s.x1, s.y2 - s.y1) }));
+  }
+
+  function drawGeomSegments(ctx, segments, scale, maxDepth = 0) {
+    if (!segments.length) return;
+    ctx.save();
+    ctx.strokeStyle = "#000000";
+    ctx.globalAlpha = 1;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const basePx = 1;
+    const baseLW = basePx / Math.max(1e-6, scale);
+    segments.forEach((s) => {
+      const depth = Math.max(0, Number.isFinite(s.depth) ? s.depth : 0);
+      const dN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+      const lw = baseLW * lerp(1.0, 0.35, dN);
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  function getSimMaxSignals(base) {
+    const s = { ...base };
+    s.words = Math.max(2200, s.words || 0);
+    s.tasks = Math.max(6, s.tasks || 0);
+    s.recursion = 1; s.abstraction = 1; s.cohesion = 1; s.argument = 1; s.diversity = 1;
+    s.wordsN = 1; s.tasksN = 1; s.recursionN = 1; s.abstractionN = 1; s.cohesionN = 1; s.argumentN = 1; s.diversityN = 1;
+    s.weeklyScoreN = 1; s.weekendScoreN = 1;
+    s.__simulateMax = true;
+    return s;
+  }
+
+  function getCourseNotes(course) {
+    const ck = getCourseKey(course);
+    return state.courseNotes?.[ck]?.notes || "";
+  }
+
+  function renderForestV01(opts = {}) {
     if (!forestCanvas) return;
-    const { ctx, w, h } = initCanvasHiDPI(forestCanvas);
+    if (typeof window !== "undefined") {
+      window.forestStats = window.forestStats || { blueprintBuilds: 0, drawCalls: 0, keystrokeRedraws: 0, regenCommits: 0, drawTreeCalls: 0, revealCalls: 0 };
+      window.forestStats.drawCalls += 1;
+    }
+    const allowRegen = opts.allowRegen !== false || !lastForestGeom;
+    const { ctx, w, h } = initCanvasHiDPI(forestCanvas, null, null, { willReadFrequently: true });
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = getCSSVar("--panel");
     ctx.fillRect(0, 0, w, h);
+    lastScaleStats = {};
+
+    const v01Store = getForestV01Store();
+    let perCourse;
+    let mode;
+    let weekId;
+    if (!allowRegen && v01Store.lastMetrics) {
+      ({ perCourse, mode, weekId } = v01Store.lastMetrics);
+    } else {
+      ({ perCourse, mode, weekId } = computeForestMetrics());
+      if (allowRegen) v01Store.lastMetrics = { perCourse, mode, weekId };
+    }
+    perCourse = perCourse || {};
+    mode = mode || { dailyRatio: 0, weeklyRatio: 0 };
+    if (state.forest.weekId !== weekId) {
+      state.forest.weekId = weekId;
+      geomCacheV01.clear();
+      saveStateSoon();
+    }
+    const simulateMax = !!state.forest.simulateMax;
+    const courses = state.courses || [];
+    if (!courses.length) {
+      ctx.fillStyle = "#8b8c9b";
+      ctx.font = "12px " + getCSSVar("--sans");
+      ctx.textAlign = "center";
+      ctx.fillText("No courses yet to render forest.", w / 2, h / 2);
+      lastForestGeom = { width: w, height: h, trees: [] };
+      renderForestLegend(perCourse, courses, weekId);
+      return;
+    }
+
+    const seedSalt = getUserSeedSalt();
+    const weekStartKey = isoWeekStartKey(weekId);
+    const dayKey = etDateKey();
+    const modeKey = focusMode || "grid";
+
+    const padL = 50;
+    const padR = 50;
+    const padT = 30;
+    const padB = 70;
+    const labelBand = 24;
+    const cells = buildCourseCells(w, h, courses, padL, padR, padT, padB, labelBand);
+
+    // max metrics for normalization
+    const maxSource = simulateMax ? (state.forest.perCourseMax || {}) : perCourse;
+    const currentMax = {
+      words: Math.max(1, ...Object.values(maxSource).map(m => m.words || 0)),
+      recursion: Math.max(0.1, ...Object.values(maxSource).map(m => m.recursion || 0)),
+      abstraction: Math.max(0.1, ...Object.values(maxSource).map(m => m.abstraction || 0)),
+      cohesion: Math.max(0.1, ...Object.values(maxSource).map(m => m.cohesion || 0)),
+      argument: Math.max(0.1, ...Object.values(maxSource).map(m => m.argument || 0)),
+      diversity: Math.max(0.1, ...Object.values(maxSource).map(m => m.diversity || 0)),
+      tasks: Math.max(1, ...Object.values(maxSource).map(m => m.tasks || 0))
+    };
+
+    const didDrawByCourse = {};
+
+    courses.forEach((course, idx) => {
+      const ck = getCourseKey(course);
+      const cell = cells[idx];
+      if (!cell) return;
+      const metrics = perCourse[course] || perCourse[ck] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
+      const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
+      const recursionN = clamp((metrics.recursion || 0) / currentMax.recursion, 0, 1);
+      const abstractionN = clamp((metrics.abstraction || 0) / currentMax.abstraction, 0, 1);
+      const cohesionN = clamp((metrics.cohesion || 0) / currentMax.cohesion, 0, 1);
+      const argumentN = clamp((metrics.argument || 0) / currentMax.argument, 0, 1);
+      const diversityN = clamp((metrics.diversity || 0) / currentMax.diversity, 0, 1);
+      const tasksN = clamp((metrics.tasks || 0) / currentMax.tasks, 0, 1);
+      const weeklyScore = weeklyScoreForCourse(course, weekId);
+      const weeklyScoreN = clamp(weeklyScore.score || 0, 0, 1);
+      const weekendDone = state.weekendTasks.filter(t => getCourseKey(t.course) === ck && t.done).length;
+      const weekendTotal = Math.max(1, state.weekendTasks.filter(t => getCourseKey(t.course) === ck).length);
+      const weekendScoreN = clamp(weekendDone / weekendTotal, 0, 1);
+      const writingDays = weeklyScore.sessions || 0;
+      const baseSignals = {
+        words: metrics.words || 0,
+        recursion: metrics.recursion || 0,
+        abstraction: metrics.abstraction || 0,
+        cohesion: metrics.cohesion || 0,
+        argument: metrics.argument || 0,
+        diversity: metrics.diversity || 0,
+        tasks: metrics.tasks || 0,
+        stress: metrics.stress || 0,
+        wordsN,
+        recursionN,
+        abstractionN,
+        cohesionN,
+        argumentN,
+        diversityN,
+        tasksN,
+        weeklyScoreN,
+        weekendScoreN,
+        writingDays,
+        noteText: getCourseNotes(course),
+        modeDaily: mode?.dailyRatio ?? 0,
+        modeWeekly: mode?.weeklyRatio ?? 0
+      };
+      const effectiveSignals = simulateMax ? getSimMaxSignals(baseSignals) : baseSignals;
+      if (simulateMax) effectiveSignals.noteText = "";
+      const weekendRel = simulateMax ? 1 : clamp(effectiveSignals.weekendScoreN ?? 0, 0, 1);
+      const growthRel = simulateMax ? 1 : clamp(getGrowthN(effectiveSignals).value ?? 0, 0, 1);
+      const targetFrac = lerp(0.18, 0.78, smoothstep(0, 1, growthRel));
+      const maxSteps = simulateMax ? MAX_STEPS : Math.round(MIN_STEPS + (MAX_STEPS - MIN_STEPS) * growthRel);
+      const noSignal = ((metrics.words | 0) === 0) && ((metrics.tasks | 0) === 0);
+      const seedKey = `${ck}|${weekStartKey}|${dayKey}|v01|${seedSalt}`;
+      const signalsHash = forestSignalsHash({ ...effectiveSignals, weekendRel, growthRel, effortAbs: computeEffortAbs(effectiveSignals.tasks || 0, effectiveSignals.writingDays || 0, effectiveSignals.words || 0) });
+
+      let params = { growthRel, targetFrac, maxSteps, weekendRel, noSignal, simulateMax, __simulateMax: effectiveSignals.__simulateMax };
+      let snapshot = null;
+      let geomSource = "fallback";
+      let regenNeeded = false;
+      if (!simulateMax) {
+        snapshot = getV01Snapshot(weekId, ck, dayKey);
+        regenNeeded = !snapshot || snapshot.signalsHash !== signalsHash;
+        if (allowRegen && regenNeeded) {
+          const snap = { signalsHash, seed: seedKey, params };
+          setV01Snapshot(weekId, ck, dayKey, snap);
+          snapshot = snap;
+          saveStateSoon();
+        }
+        if (snapshot?.params) params = snapshot.params;
+      }
+
+      const cacheSignalsHash = (!simulateMax && snapshot?.signalsHash) ? snapshot.signalsHash : signalsHash;
+      const cacheKey = getGeomCacheKeyV01({ ck, weekId, dayKey, modeKey, simulateMax, signalsHash: cacheSignalsHash });
+      const forceRegen = allowRegen && getV01DebugFlag("V01_DEBUG_SPAWN_HISTO");
+      let geom = forceRegen ? null : geomCacheV01.get(cacheKey);
+      if (!geom && allowRegen) {
+        geom = generateGeomV01({ course, label: ck, seedKey, signals: { ...effectiveSignals, weekendRel }, params, simulateMax });
+        geomCacheV01.set(cacheKey, geom);
+        geomSource = geom?.meta?.source || "regen";
+      } else if (geom) {
+        geomSource = "cache";
+      }
+      if (!geom) {
+        geom = { segments: makeFallbackSegments(seedKey), meta: { maxStepsUsed: params.maxSteps, source: "fallback" } };
+        geomSource = "fallback";
+      }
+
+      const geomMeta = geom.meta || {};
+      const maxDepthForRender = geomMeta.observedMaxDepth ?? geomMeta.depthMaxReached ?? geomMeta.maxDepth ?? 0;
+      const sanitized = sanitizeSegments(geom.segments || [], maxDepthForRender, { minLenBase: 0.6, minLenEnd: 1.8, densityCap: !!simulateMax });
+      let segments = sanitized.segments;
+      if (!segments.length) {
+        segments = makeFallbackSegments(seedKey);
+        geomSource = "fallback";
+      }
+      const bounds = computeSegmentsBounds(segments);
+      const segStats = computeSegmentStats(segments);
+      const availH = Math.max(1, cell.h - TOP_PAD - BOTTOM_PAD);
+      const minTargetPx = simulateMax ? 220 : 70;
+      const targetH = Math.max(availH * params.targetFrac, minTargetPx);
+      const s = Math.min((0.90 * cell.w) / Math.max(1e-6, bounds.width), targetH / Math.max(1e-6, bounds.height));
+      const targetX = cell.x + cell.w / 2;
+      const targetY = cell.y + cell.h - 10;
+      const anchorX = (bounds.minX + bounds.maxX) / 2;
+      const anchorY = bounds.maxY;
+
+      ctx.save();
+      try {
+        ctx.translate(targetX, targetY);
+        ctx.scale(s, s);
+        ctx.translate(-anchorX, -anchorY);
+        drawGeomSegments(ctx, segments, s, maxDepthForRender);
+      } finally {
+        ctx.restore();
+      }
+
+      lastScaleStats[ck] = {
+        courseKey: ck,
+        geomSource,
+        growthRel,
+        targetFrac,
+        maxStepsUsed: params.maxSteps,
+        bounds,
+        scale: s,
+        targetH,
+        availH,
+        heightFill: (bounds.height * s) / Math.max(1e-6, availH),
+        spawnReport: geomMeta.spawnReport || null,
+        segBefore: geomMeta.segBefore ?? geomMeta.segmentsBeforeSanitize ?? segments.length,
+        segAfter: geomMeta.segAfter ?? geomMeta.segmentsAfterSanitize ?? segments.length,
+        densityCapApplied: geomMeta.densityCapApplied ?? sanitized.densityCapApplied ?? false,
+        segKeptCountByDepth: geomMeta.segKeptCountByDepth || [],
+        segKeptAvgLenByDepth: geomMeta.segKeptAvgLenByDepth || [],
+        horizFrac: segStats.horizFrac,
+        upFrac: segStats.upFrac,
+        didDraw: true,
+        rect: { x: cell.x, y: cell.y, w: cell.w, h: cell.h }
+      };
+
+      if (geomMeta.spawnReport && typeof window !== "undefined") {
+        window.forestStats = window.forestStats || { blueprintBuilds: 0, drawCalls: 0, keystrokeRedraws: 0, regenCommits: 0, drawTreeCalls: 0, revealCalls: 0 };
+        window.forestStats.v01SpawnReport = window.forestStats.v01SpawnReport || {};
+        window.forestStats.v01SpawnReport[ck] = geomMeta.spawnReport;
+      }
+      didDrawByCourse[ck] = true;
+    });
+
+    lastForestGeom = { width: w, height: h, trees: [] };
+    renderForestLegend(perCourse, courses, weekId);
+  }
+
+  function renderForestFrame(opts = {}) {
+    if (FOREST_ENGINE === "v01") {
+      return renderForestV01(opts);
+    }
+    return renderForest();
+  }
+
+  let forestFastFramePending = false;
+  function markForestDirty() {
+    if (forestFastFramePending) return;
+    forestFastFramePending = true;
+    requestAnimationFrame(() => {
+      forestFastFramePending = false;
+      try {
+        renderForestFrame({ allowRegen: false });
+      } catch (err) {
+        console.error("renderForest failed", err);
+      }
+    });
+  }
+
+  if (typeof window !== "undefined") {
+    window.dumpV01SpawnHistogram = function dumpV01SpawnHistogram(courseKey = null) {
+      const reportMap = window.forestStats?.v01SpawnReport || {};
+      const keys = Object.keys(reportMap);
+      if (!keys.length) {
+        console.warn("[V01Spawn] no spawn report available (enable V01_DEBUG_SPAWN_HISTO and rerender)");
+        return;
+      }
+      const list = courseKey ? [courseKey] : keys;
+      list.forEach((ck) => {
+        const rep = reportMap[ck];
+        if (!rep) return;
+        const total = rep.total || 0;
+        const attempts = rep.attempts || 0;
+        const bins = rep.bins || [];
+        const rows = bins.map((count, i) => ({ bin: i, count, pct: total ? Number(((count / total) * 100).toFixed(1)) : 0 }));
+        console.log("[V01Spawn] course", ck, { total, attempts, rejects: rep.rejects || {} });
+        console.table(rows);
+      });
+    };
+  }
+  function renderForest() {
+    if (FOREST_ENGINE === "v01") {
+      renderForestV01({ allowRegen: true });
+      return;
+    }
+    if (!forestCanvas) return;
+    const { ctx, w, h } = initCanvasHiDPI(forestCanvas, null, null, { willReadFrequently: true });
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = getCSSVar("--panel");
+    ctx.fillRect(0, 0, w, h);
+    lastScaleStats = {};
 
     const { perCourse, mode, weekId } = computeForestMetrics();
     const simulateMax = !!state.forest.simulateMax;
@@ -3037,7 +4895,15 @@
     if (state.forest.weekId !== weekId) {
       state.forest.weekId = weekId;
       saveState();
+      invalidateForestCaches();
     }
+
+    const seedSalt = getUserSeedSalt();
+    const weekStartKey = isoWeekStartKey(weekId);
+    const dayKey = etDateKey();
+    const flags = { simulateMax };
+    const effortAbsByCourse = {};
+    let effortTotal = 0;
 
     state.forest.perCourseMax = state.forest.perCourseMax || {};
     let maxChanged = false;
@@ -3076,49 +4942,858 @@
     const padL = 50;
     const padR = 50;
     const padT = 30;
+    const padB = 70;
+    const labelBand = 24;
     const baseY = clamp(h * 0.62, padT + 140, h - 140);
-    const spacing = w / (courses.length + 1);
-    const geom = { width: w, height: h, trees: [] };
+    const forestGeom = { width: w, height: h, trees: [], cells: [] };
+    const cells = buildCourseCells(w, h, courses, padL, padR, padT, padB, labelBand);
+    forestGeom.cells = cells;
+    lastCourseCells = cells.map((cell, idx) => ({
+      course: courses[idx],
+      x: cell.x,
+      y: cell.y,
+      w: cell.w,
+      h: cell.h + labelBand
+    }));
 
-    if (state.forest.showFullGhost) {
+    const courseSignals = {};
+    const effectiveSignalsByCourse = {};
+    courses.forEach((course) => {
+      const metrics = perCourse[course] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
+      const maxMetrics = (state.forest.perCourseMax || {})[course] || {};
+      const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
+      const recursionN = clamp((metrics.recursion || 0) / currentMax.recursion, 0, 1);
+      const abstractionN = clamp((metrics.abstraction || 0) / currentMax.abstraction, 0, 1);
+      const cohesionN = clamp((metrics.cohesion || 0) / currentMax.cohesion, 0, 1);
+      const argumentN = clamp((metrics.argument || 0) / currentMax.argument, 0, 1);
+      const diversityN = clamp((metrics.diversity || 0) / currentMax.diversity, 0, 1);
+      const tasksN = clamp((metrics.tasks || 0) / currentMax.tasks, 0, 1);
+      const weeklyScore = weeklyScoreForCourse(course, weekId);
+      const weeklyScoreN = clamp(weeklyScore.score || 0, 0, 1);
+      const weekendDone = state.weekendTasks.filter(t => t.course === course && t.done).length;
+      const weekendTotal = Math.max(1, state.weekendTasks.filter(t => t.course === course).length);
+      const weekendScoreN = clamp(weekendDone / weekendTotal, 0, 1);
+      const writingDays = weeklyScore.sessions || 0;
+      const baseSignals = {
+        words: metrics.words || 0,
+        recursion: metrics.recursion || 0,
+        abstraction: metrics.abstraction || 0,
+        cohesion: metrics.cohesion || 0,
+        argument: metrics.argument || 0,
+        diversity: metrics.diversity || 0,
+        tasks: metrics.tasks || 0,
+        stress: metrics.stress || 0,
+        wordsN,
+        recursionN,
+        abstractionN,
+        cohesionN,
+        argumentN,
+        diversityN,
+        tasksN,
+        weeklyScoreN,
+        weekendScoreN,
+        writingDays,
+        maxWords: maxMetrics.words ?? metrics.words,
+        maxRecursion: maxMetrics.recursion ?? metrics.recursion,
+        maxAbstraction: maxMetrics.abstraction ?? metrics.abstraction,
+        maxCohesion: maxMetrics.cohesion ?? metrics.cohesion,
+        maxArgument: maxMetrics.argument ?? metrics.argument,
+        maxDiversity: maxMetrics.diversity ?? metrics.diversity,
+        maxTasks: maxMetrics.tasks ?? metrics.tasks
+      };
+      const effectiveSignals = getEffectiveCourseSignals(course, baseSignals, flags);
+      const effortAbs = computeEffortAbs(effectiveSignals.tasks || 0, effectiveSignals.writingDays || 0, effectiveSignals.words || 0);
+      effortAbsByCourse[course] = effortAbs;
+      effortTotal += effortAbs;
+      const growthInfo = getGrowthN(effectiveSignals);
+      courseSignals[course] = {
+        growthInfo,
+        ...effectiveSignals,
+        effortAbs
+      };
+      effectiveSignalsByCourse[course] = effectiveSignals;
+    });
+    const idleMode = effortTotal < IDLE_EPS;
+    const growthRelByCourse = {};
+    courses.forEach((course) => {
+      if (simulateMax) {
+        growthRelByCourse[course] = 1;
+        return;
+      }
+      growthRelByCourse[course] = (idleMode || effortTotal <= 0)
+        ? 0
+        : clamp((effortAbsByCourse[course] || 0) / effortTotal, 0, 1);
+    });
+    const growthNorm = computeGrowthNormalization(courses, courseSignals);
+    const growthRelFinalByCourse = {};
+    courses.forEach((course) => {
+      if (simulateMax) {
+        growthRelFinalByCourse[course] = 1;
+        return;
+      }
+      growthRelFinalByCourse[course] = growthNorm.flat
+        ? (growthNorm.byCourseId.get(course)?.growthRel ?? 0)
+        : (growthRelByCourse[course] ?? 0);
+    });
+    const normalizationSnapshot = {
+      minRaw: growthNorm.minRaw,
+      maxRaw: growthNorm.maxRaw,
+      spread: (growthNorm.maxRaw - growthNorm.minRaw),
+      effortTotal,
+      idleMode,
+      byCourse: {}
+    };
+    growthNorm.byCourseId.forEach((val, key) => {
+      normalizationSnapshot.byCourse[key] = {
+        rawGrowth: val.rawGrowth ?? 0,
+        growthRel: growthRelFinalByCourse[key] ?? 0,
+        effortAbs: effortAbsByCourse[key] ?? 0
+      };
+    });
+    const courseMetricRows = [];
+
+    if (focusMode !== "grid" && (!focusedCourse || !courses.includes(focusedCourse))) {
+      focusMode = "grid";
+      focusedCourse = null;
+      updateFocusUi();
+    }
+
+    const isFocus = focusMode === "focus";
+    const isHybrid = focusMode === "hybrid";
+    const focusCourse = (isFocus || isHybrid) ? focusedCourse : null;
+    if (!focusCourse && state.forest.showFullGhost) {
       const fullGhost = buildFullGhost(w, h, padL, padR, padT, baseY, perCourse, mode, weekId);
+      fullGhost.trees.forEach((tree, idx) => {
+        const bounds = computeGeomBounds(tree);
+        const cell = cells[idx];
+        if (!cell) return;
+        const transform = fitBoundsToCell(bounds, cell, DEBUG_FOREST.cellPadding || 18);
+        applyTransformToGeom(tree, transform);
+      });
       drawGhostForest(ctx, w, h, padL, padR, baseY, fullGhost);
-    } else {
+    } else if (!focusCourse) {
       drawGhostForest(ctx, w, h, padL, padR, baseY);
     }
 
+    if (!focusCourse && DEBUG_FOREST.enabled && DEBUG_FOREST.showCells) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,0,0,0.18)";
+      ctx.setLineDash([6, 6]);
+      cells.forEach((cell) => {
+        ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+      });
+      ctx.restore();
+    }
+
+    if (isFocus && focusCourse) {
+      const idx = courses.indexOf(focusCourse);
+      const cell = cells[idx];
+      if (cell) {
+        const metrics = perCourse[focusCourse] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
+        const eff = effectiveSignalsByCourse[focusCourse] || {};
+        const wordsN = eff.wordsN ?? 0;
+        const recursionN = eff.recursionN ?? 0;
+        const abstractionN = eff.abstractionN ?? 0;
+        const cohesionN = eff.cohesionN ?? 0;
+        const argumentN = eff.argumentN ?? 0;
+        const diversityN = eff.diversityN ?? 0;
+        const tasksN = eff.tasksN ?? 0;
+        const stress = clamp(eff.stress ?? metrics.stress ?? 0, 0, 1);
+
+        const growthEntry = growthNorm.byCourseId.get(focusCourse) || {};
+        const growthRel = growthRelFinalByCourse[focusCourse] ?? 0;
+        const sproutN = clamp(smoothstep(0.0, 0.18, growthRel), 0, 1);
+        const isSprout = !simulateMax && growthRel < 0.18;
+        const seedBase = `${focusCourse}|${weekStartKey}|${seedSalt}`;
+        const effortAbs = effortAbsByCourse[focusCourse] || 0;
+        const noteText = state.courseNotes?.[focusCourse]?.notes || "";
+        const keywordCount = courseKeywords(focusCourse).size;
+        const phraseCount = keyPhrases(noteText, 8).length;
+        const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+
+        const weeklyScoreN = eff.weeklyScoreN ?? 0;
+        const weekendScoreN = eff.weekendScoreN ?? 0;
+
+        const isGcas = /gcas/i.test(focusCourse);
+        const heightScale = isGcas ? 1 : 0.7;
+        const canopyBoost = isGcas ? 1 : 1.2;
+        const maxHeight = Math.max(40, baseY - padT - 70);
+        const height = Math.min(
+          maxHeight * 0.6 * heightScale,
+          (12 + 40 * weeklyScoreN + 16 * (wordsN * weeklyScoreN) + 10 * (tasksN * weeklyScoreN)) * heightScale
+        );
+        const complexityN = clamp((wordsN + recursionN + abstractionN + cohesionN + argumentN + diversityN + weeklyScoreN) / 7, 0, 1);
+        const leaves = weekendScoreN > 0
+          ? clamp(0.4 + 1.6 * weekendScoreN * canopyBoost + 0.8 * abstractionN * weeklyScoreN + 0.3 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2)
+          : 0;
+        const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
+        const x0 = cell.x + cell.w * 0.5;
+
+        const focusKey = getGeomCacheKey(focusCourse, flags, eff, growthRel, weekId, dayKey, "focus", seedSalt);
+        let treeGeom = geomCache.get(focusKey);
+        if (!treeGeom) {
+          treeGeom = drawTree(ctx, {
+            x0,
+            baseY,
+            height,
+            trunkW: 0.4 + 1.4 * argumentN,
+            branchiness: 0,
+            leaves,
+            crownSpread: 0,
+            stress,
+            padT,
+            padL,
+            padR,
+            w,
+            dayLight,
+            recursionN,
+            abstractionN,
+            cohesionN,
+            argumentN,
+            diversityN,
+            tasksN,
+            wordsN,
+            conceptN,
+            weeklyScoreN,
+            weekendScoreN,
+            noteText,
+            recursion: eff.recursion ?? metrics.recursion ?? 0,
+            abstraction: eff.abstraction ?? metrics.abstraction ?? 0,
+            cohesion: eff.cohesion ?? metrics.cohesion ?? 0,
+            argument: eff.argument ?? metrics.argument ?? 0,
+            diversity: eff.diversity ?? metrics.diversity ?? 0,
+            complexityN,
+            seedKey: seedBase,
+            course: focusCourse,
+            mode,
+            captureOnly: true,
+            courseId: focusCourse,
+            debug: DEBUG_FOREST,
+            growthRel,
+            effortAbs,
+            effortTotal,
+            idleMode,
+            sproutN,
+            isSprout
+          });
+          geomCache.set(focusKey, treeGeom);
+        }
+
+        const bounds = computeGeomBounds(treeGeom);
+        const trunkMetrics = treeGeom.trunkMetrics || {};
+        const morphStats = treeGeom.morphStats || {};
+        const focusCell = { x: padL, y: padT, w: w - padL - padR, h: h - padT - padB - labelBand };
+        const growthInfo = growthEntry.growthInfo || getGrowthN({});
+        const growthN = growthInfo.value;
+        const rel = growthEntry.rel ?? 0;
+        const targetFrac = targetFracForGrowth(growthRel, idleMode);
+        const availH = Math.max(1, focusCell.h - 16 - 10);
+        const targetH = availH * targetFrac;
+        const yScaleRaw = targetH / Math.max(1e-6, bounds.height);
+        const xScaleCap = (0.92 * focusCell.w) / Math.max(1e-6, bounds.width);
+        const minS = 0.9;
+        const maxS = 6.5;
+        const widthLimited = yScaleRaw > xScaleCap;
+        const xScale = clamp(Math.min(yScaleRaw, xScaleCap), minS, maxS);
+        const yScale = xScale;
+        const appliedAniso = 1;
+        lastScaleStats[focusCourse] = {
+          course: focusCourse,
+          growthN,
+          rel,
+          growthRel,
+          minRaw: growthNorm.minRaw,
+          maxRaw: growthNorm.maxRaw,
+          rawGrowth: growthInfo.rawGrowth,
+          weekly: growthInfo.weekly,
+          tasksTerm: growthInfo.tasksTerm,
+          wordsTerm: growthInfo.wordsTerm,
+          recursion: growthInfo.recursion,
+          cohesion: growthInfo.cohesion,
+          trunkBudgetSteps: trunkMetrics.trunkBudgetSteps,
+          trunkStep: trunkMetrics.trunkStep,
+          trunkLenMult: trunkMetrics.trunkLenMult,
+          effortAbs,
+          effortTotal,
+          idleMode: !!idleMode,
+          isSprout,
+          sproutN,
+          desiredPx: Math.min(STROKE_BASE_PX, isSprout ? 0.9 : 1.6),
+          recDepth: morphStats.recDepth,
+        branchProb: morphStats.branchProb,
+        clusterProb: morphStats.clusterProb,
+        segmentsDrawn: morphStats.segmentsDrawn,
+        branchEvents: morphStats.branchEvents,
+        flatNorm: !!growthNorm.flat,
+        normRange: growthNorm.range,
+        normMode: growthNorm.flat ? "absolute-fallback" : "relative",
+        targetFrac,
+          availH,
+          bboxH: bounds.height,
+          targetH,
+          yScaleRaw,
+          xScale,
+          yScale,
+          appliedAniso,
+          widthLimited,
+          anchorX: bounds.minX + bounds.width / 2,
+          anchorY: bounds.maxY,
+          targetX: focusCell.x + focusCell.w * 0.5,
+          targetY: focusCell.y + focusCell.h - 10,
+          scaleFinal: Math.min(xScale, yScale),
+          widthCapScale: xScaleCap
+        };
+      courseMetricRows.push({
+        name: focusCourse,
+        rawGrowth: growthInfo.rawGrowth,
+        growthRel,
+        targetFrac,
+        targetH,
+        availH,
+        bbox: { w: bounds.width, h: bounds.height },
+        scale: {
+          yScaleRaw,
+          widthCapScale: xScaleCap,
+          xScale,
+          yScale,
+          appliedAniso,
+          widthLimited,
+          scaleFinal: Math.min(xScale, yScale)
+        },
+        trunk: {
+          trunkBudgetSteps: trunkMetrics.trunkBudgetSteps,
+          trunkStep: trunkMetrics.trunkStep,
+          trunkLenMult: trunkMetrics.trunkLenMult
+        }
+      });
+        if (DEBUG_SCALE) {
+          console.log("focus-scale", {
+            course: focusCourse,
+            growthN,
+            bboxH: bounds.height,
+            targetH,
+            scaleRaw,
+            scaleFinal: scale
+          });
+        }
+        const anchorX = bounds.minX + bounds.width / 2;
+        const anchorY = bounds.maxY;
+        const targetX = focusCell.x + focusCell.w * 0.5;
+        const targetY = focusCell.y + focusCell.h - 10;
+
+        ctx.save();
+        try {
+          ctx.translate(targetX, targetY);
+          ctx.scale(xScale, yScale);
+          ctx.translate(-anchorX, -anchorY);
+          if (state.forest.showFullGhost) {
+            const prevGeom = prevGeomByKey.get(focusKey);
+            if (prevGeom) {
+              ctx.save();
+              ctx.globalAlpha = 0.12;
+              renderGeom(ctx, prevGeom, xScale, yScale);
+              ctx.restore();
+            }
+          }
+          renderGeom(ctx, treeGeom, xScale, yScale);
+          renderLeaves(ctx, treeGeom, treeGeom.seedKey || `${weekId}|${focusCourse}`, treeGeom.leafSettings);
+          if (DEBUG_FOREST.showBBoxes) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(0,0,0,0.35)";
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(bounds.minX, bounds.minY, bounds.width, bounds.height);
+            ctx.restore();
+          }
+        } finally {
+          ctx.restore();
+        }
+
+        prevGeomByKey.set(focusKey, treeGeom);
+        forestGeom.trees.push(treeGeom);
+      }
+
+      const topByGrowthRel = courseMetricRows
+        .slice()
+        .sort((a, b) => (b.growthRel || 0) - (a.growthRel || 0))
+        .slice(0, 3)
+        .map((c) => ({ name: c.name, growthRel: c.growthRel }));
+      const topByScaleFinal = courseMetricRows
+        .slice()
+        .sort((a, b) => (b.scale?.scaleFinal || 0) - (a.scale?.scaleFinal || 0))
+        .slice(0, 3)
+        .map((c) => ({ name: c.name, scaleFinal: c.scale?.scaleFinal || 0 }));
+
+      MetricsReporter.report({
+        mode: focusMode,
+        selectedCourse: focusCourse || null,
+        canvas: { w: forestCanvas.width, h: forestCanvas.height },
+        normalization: normalizationSnapshot,
+        courses: courseMetricRows,
+        top: { byGrowthRel: topByGrowthRel, byScaleFinal: topByScaleFinal }
+      });
+
+      applyOrderedDither(ctx, w, h, 0.035);
+      lastForestGeom = forestGeom;
+      renderForestLegend(perCourse, courses, weekId);
+      renderScaleDebug(focusCourse);
+      return;
+    }
+
+    if (isHybrid && focusCourse) {
+      const thumbStripH = clamp(Math.round(h * 0.22), 80, 160);
+      const stripY = h - padB - thumbStripH;
+      const mainCell = {
+        x: padL,
+        y: padT,
+        w: w - padL - padR,
+        h: Math.max(1, stripY - padT)
+      };
+      lastCourseCells = [{
+        course: focusCourse,
+        x: mainCell.x,
+        y: mainCell.y,
+        w: mainCell.w,
+        h: mainCell.h
+      }];
+
+      const metrics = perCourse[focusCourse] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
+      const eff = effectiveSignalsByCourse[focusCourse] || {};
+      const wordsN = eff.wordsN ?? 0;
+      const recursionN = eff.recursionN ?? 0;
+      const abstractionN = eff.abstractionN ?? 0;
+      const cohesionN = eff.cohesionN ?? 0;
+      const argumentN = eff.argumentN ?? 0;
+      const diversityN = eff.diversityN ?? 0;
+      const tasksN = eff.tasksN ?? 0;
+      const stress = clamp(eff.stress ?? metrics.stress ?? 0, 0, 1);
+
+      const growthEntry = growthNorm.byCourseId.get(focusCourse) || {};
+      const growthRel = growthRelFinalByCourse[focusCourse] ?? 0;
+      const sproutN = clamp(smoothstep(0.0, 0.18, growthRel), 0, 1);
+      const isSprout = !simulateMax && growthRel < 0.18;
+      const seedBase = `${focusCourse}|${weekStartKey}|${seedSalt}`;
+      const effortAbs = effortAbsByCourse[focusCourse] || 0;
+      const noteText = state.courseNotes?.[focusCourse]?.notes || "";
+      const keywordCount = courseKeywords(focusCourse).size;
+      const phraseCount = keyPhrases(noteText, 8).length;
+      const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+
+      const weeklyScoreN = eff.weeklyScoreN ?? 0;
+      const weekendScoreN = eff.weekendScoreN ?? 0;
+
+      const isGcas = /gcas/i.test(focusCourse);
+      const heightScale = isGcas ? 1 : 0.7;
+      const canopyBoost = isGcas ? 1 : 1.2;
+      const maxHeight = Math.max(40, baseY - padT - 70);
+      const height = Math.min(
+        maxHeight * 0.6 * heightScale,
+        (12 + 40 * weeklyScoreN + 16 * (wordsN * weeklyScoreN) + 10 * (tasksN * weeklyScoreN)) * heightScale
+      );
+      const complexityN = clamp((wordsN + recursionN + abstractionN + cohesionN + argumentN + diversityN + weeklyScoreN) / 7, 0, 1);
+      const leaves = weekendScoreN > 0
+        ? clamp(0.4 + 1.6 * weekendScoreN * canopyBoost + 0.8 * abstractionN * weeklyScoreN + 0.3 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2)
+        : 0;
+      const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
+      const x0 = mainCell.x + mainCell.w * 0.5;
+
+      const mainKey = getGeomCacheKey(focusCourse, flags, eff, growthRel, weekId, dayKey, "hybrid-main", seedSalt);
+      let treeGeom = geomCache.get(mainKey);
+      if (!treeGeom) {
+        treeGeom = drawTree(ctx, {
+          x0,
+          baseY,
+          height,
+          trunkW: 0.4 + 1.4 * argumentN,
+          branchiness: 0,
+          leaves,
+          crownSpread: 0,
+          stress,
+          padT,
+          padL,
+          padR,
+          w,
+          dayLight,
+          recursionN,
+          abstractionN,
+          cohesionN,
+          argumentN,
+          diversityN,
+          tasksN,
+          wordsN,
+          conceptN,
+          weeklyScoreN,
+          weekendScoreN,
+          noteText,
+          recursion: eff.recursion ?? metrics.recursion ?? 0,
+          abstraction: eff.abstraction ?? metrics.abstraction ?? 0,
+          cohesion: eff.cohesion ?? metrics.cohesion ?? 0,
+          argument: eff.argument ?? metrics.argument ?? 0,
+          diversity: eff.diversity ?? metrics.diversity ?? 0,
+          complexityN,
+          seedKey: seedBase,
+          course: focusCourse,
+          mode,
+          captureOnly: true,
+          courseId: focusCourse,
+          debug: DEBUG_FOREST,
+          growthRel,
+          effortAbs,
+          effortTotal,
+          idleMode,
+          sproutN,
+          isSprout
+        });
+        geomCache.set(mainKey, treeGeom);
+      }
+      const bounds = computeGeomBounds(treeGeom);
+      const trunkMetrics = treeGeom.trunkMetrics || {};
+      const morphStats = treeGeom.morphStats || {};
+      const growthInfo = growthEntry.growthInfo || getGrowthN({});
+      const growthN = growthInfo.value;
+      const rel = growthEntry.rel ?? 0;
+      const targetFrac = targetFracForGrowth(growthRel, idleMode);
+      const availH = Math.max(1, mainCell.h - 16 - 10);
+      const targetH = availH * targetFrac;
+      const yScaleRaw = targetH / Math.max(1e-6, bounds.height);
+      const xScaleCap = (0.92 * mainCell.w) / Math.max(1e-6, bounds.width);
+      const minS = 0.9;
+      const maxS = 6.5;
+      const widthLimited = yScaleRaw > xScaleCap;
+      const xScale = clamp(Math.min(yScaleRaw, xScaleCap), minS, maxS);
+      const yScale = xScale;
+      const appliedAniso = 1;
+      lastScaleStats[focusCourse] = {
+        course: focusCourse,
+        growthN,
+        rel,
+        growthRel,
+        minRaw: growthNorm.minRaw,
+        maxRaw: growthNorm.maxRaw,
+        rawGrowth: growthInfo.rawGrowth,
+        weekly: growthInfo.weekly,
+        tasksTerm: growthInfo.tasksTerm,
+        wordsTerm: growthInfo.wordsTerm,
+        recursion: growthInfo.recursion,
+        cohesion: growthInfo.cohesion,
+        trunkBudgetSteps: trunkMetrics.trunkBudgetSteps,
+        trunkStep: trunkMetrics.trunkStep,
+        trunkLenMult: trunkMetrics.trunkLenMult,
+        effortAbs,
+        effortTotal,
+        idleMode: !!idleMode,
+        isSprout,
+        sproutN,
+        desiredPx: Math.min(STROKE_BASE_PX, isSprout ? 0.9 : 1.6),
+        recDepth: morphStats.recDepth,
+        branchProb: morphStats.branchProb,
+        clusterProb: morphStats.clusterProb,
+        segmentsDrawn: morphStats.segmentsDrawn,
+        branchEvents: morphStats.branchEvents,
+        flatNorm: !!growthNorm.flat,
+        normRange: growthNorm.range,
+        normMode: growthNorm.flat ? "absolute-fallback" : "relative",
+        targetFrac,
+        availH,
+        bboxH: bounds.height,
+        targetH,
+        yScaleRaw,
+        xScale,
+        yScale,
+        appliedAniso,
+        widthLimited,
+        anchorX: bounds.minX + bounds.width / 2,
+        anchorY: bounds.maxY,
+        targetX: mainCell.x + mainCell.w * 0.5,
+        targetY: mainCell.y + mainCell.h - 10,
+        scaleFinal: Math.min(xScale, yScale),
+        widthCapScale: xScaleCap
+      };
+      courseMetricRows.push({
+        name: focusCourse,
+        rawGrowth: growthInfo.rawGrowth,
+        growthRel,
+        targetFrac,
+        targetH,
+        availH,
+        bbox: { w: bounds.width, h: bounds.height },
+        scale: {
+          yScaleRaw,
+          widthCapScale: xScaleCap,
+          xScale,
+          yScale,
+          appliedAniso,
+          widthLimited,
+          scaleFinal: Math.min(xScale, yScale)
+        },
+        trunk: {
+          trunkBudgetSteps: trunkMetrics.trunkBudgetSteps,
+          trunkStep: trunkMetrics.trunkStep,
+          trunkLenMult: trunkMetrics.trunkLenMult
+        }
+      });
+      if (DEBUG_SCALE) {
+        console.log("hybrid-scale", {
+          course: focusCourse,
+          growthN,
+          bboxH: bounds.height,
+          targetH,
+          scaleRaw,
+          scaleFinal: scale
+        });
+      }
+      const anchorX = bounds.minX + bounds.width / 2;
+      const anchorY = bounds.maxY;
+      const targetX = mainCell.x + mainCell.w * 0.5;
+      const targetY = mainCell.y + mainCell.h - 10;
+
+      ctx.save();
+      try {
+        ctx.translate(targetX, targetY);
+        ctx.scale(xScale, yScale);
+        ctx.translate(-anchorX, -anchorY);
+        if (state.forest.showFullGhost) {
+          const prevGeom = prevGeomByKey.get(mainKey);
+          if (prevGeom) {
+            ctx.save();
+            ctx.globalAlpha = 0.12;
+            renderGeom(ctx, prevGeom, xScale, yScale);
+            ctx.restore();
+          }
+        }
+        renderGeom(ctx, treeGeom, xScale, yScale);
+        renderLeaves(ctx, treeGeom, treeGeom.seedKey || `${weekId}|${focusCourse}`, treeGeom.leafSettings);
+        if (DEBUG_FOREST.showBBoxes) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(0,0,0,0.35)";
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(bounds.minX, bounds.minY, bounds.width, bounds.height);
+          ctx.restore();
+        }
+      } finally {
+        ctx.restore();
+      }
+
+      prevGeomByKey.set(mainKey, treeGeom);
+      forestGeom.trees.push(treeGeom);
+
+      const others = courses.filter(c => c !== focusCourse);
+      const thumbCount = Math.max(1, others.length);
+      const thumbW = (w - padL - padR) / thumbCount;
+      others.forEach((course, i) => {
+        const cell = {
+          x: padL + i * thumbW,
+          y: stripY,
+          w: thumbW,
+          h: thumbStripH
+        };
+        lastCourseCells.push({
+          course,
+          x: cell.x,
+          y: cell.y,
+          w: cell.w,
+          h: cell.h
+        });
+        const metrics = perCourse[course] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
+        const eff = effectiveSignalsByCourse[course] || {};
+        const wordsN = eff.wordsN ?? 0;
+        const recursionN = eff.recursionN ?? 0;
+        const abstractionN = eff.abstractionN ?? 0;
+        const cohesionN = eff.cohesionN ?? 0;
+        const argumentN = eff.argumentN ?? 0;
+        const diversityN = eff.diversityN ?? 0;
+        const tasksN = eff.tasksN ?? 0;
+        const stress = clamp(eff.stress ?? metrics.stress ?? 0, 0, 1);
+
+        const noteText = state.courseNotes?.[course]?.notes || "";
+        const seedBase = `${course}|${weekStartKey}|${seedSalt}`;
+        const effortAbs = effortAbsByCourse[course] || 0;
+        const sproutN = clamp(smoothstep(0.0, 0.18, growthRelFinalByCourse[course] ?? 0), 0, 1);
+        const isSprout = !simulateMax && (growthRelFinalByCourse[course] ?? 0) < 0.18;
+        const keywordCount = courseKeywords(course).size;
+        const phraseCount = keyPhrases(noteText, 8).length;
+        const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+
+        const weeklyScoreN = eff.weeklyScoreN ?? 0;
+        const weekendScoreN = eff.weekendScoreN ?? 0;
+
+        const isGcas = /gcas/i.test(course);
+        const heightScale = isGcas ? 1 : 0.7;
+        const canopyBoost = isGcas ? 1 : 1.2;
+        const maxHeight = Math.max(40, baseY - padT - 70);
+        const height = Math.min(
+          maxHeight * 0.6 * heightScale,
+          (12 + 40 * weeklyScoreN + 16 * (wordsN * weeklyScoreN) + 10 * (tasksN * weeklyScoreN)) * heightScale
+        );
+        const complexityN = clamp((wordsN + recursionN + abstractionN + cohesionN + argumentN + diversityN + weeklyScoreN) / 7, 0, 1);
+        const leaves = weekendScoreN > 0
+          ? clamp(0.4 + 1.6 * weekendScoreN * canopyBoost + 0.8 * abstractionN * weeklyScoreN + 0.3 * mode.weeklyRatio * weeklyScoreN, 0.3, 3.2)
+          : 0;
+        const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
+        const x0 = cell.x + cell.w * 0.5;
+
+        const growthRel = growthRelFinalByCourse[course] ?? 0;
+        const thumbKey = getGeomCacheKey(course, flags, eff, growthRel, weekId, dayKey, "hybrid-thumb", seedSalt);
+        let treeGeom = geomCache.get(thumbKey);
+        if (!treeGeom) {
+          treeGeom = drawTree(ctx, {
+            x0,
+            baseY,
+            height,
+            trunkW: 0.4 + 1.4 * argumentN,
+            branchiness: 0,
+            leaves,
+            crownSpread: 0,
+            stress,
+            padT,
+            padL,
+            padR,
+            w,
+            dayLight,
+            recursionN,
+            abstractionN,
+            cohesionN,
+            argumentN,
+            diversityN,
+            tasksN,
+            wordsN,
+            conceptN,
+            weeklyScoreN,
+            weekendScoreN,
+            noteText,
+            recursion: eff.recursion ?? metrics.recursion ?? 0,
+            abstraction: eff.abstraction ?? metrics.abstraction ?? 0,
+            cohesion: eff.cohesion ?? metrics.cohesion ?? 0,
+            argument: eff.argument ?? metrics.argument ?? 0,
+            diversity: eff.diversity ?? metrics.diversity ?? 0,
+            complexityN,
+            seedKey: seedBase,
+            course,
+            mode,
+            captureOnly: true,
+            courseId: course,
+            debug: DEBUG_FOREST,
+            growthRel,
+            effortAbs,
+            effortTotal,
+            idleMode,
+            sproutN,
+            isSprout
+          });
+          geomCache.set(thumbKey, treeGeom);
+        }
+
+        const bounds = computeGeomBounds(treeGeom);
+        const growthEntry = growthNorm.byCourseId.get(course) || {};
+        const growthInfo = growthEntry.growthInfo || getGrowthN({});
+        const targetFrac = targetFracForGrowth(growthRel, idleMode);
+        const availH = Math.max(1, cell.h - 16 - 10);
+        const targetH = availH * targetFrac;
+        const yScaleRaw = targetH / Math.max(1e-6, bounds.height);
+        const xScaleCap = (0.92 * cell.w) / Math.max(1e-6, bounds.width);
+        const thumbBaseScale = clamp(Math.min(yScaleRaw, xScaleCap), 0.5, 3.0);
+        const thumbScale = clamp(thumbBaseScale * (0.7 + 0.3 * growthRel), 0.4, 3.0);
+
+        ctx.save();
+        try {
+          ctx.globalAlpha = 0.16;
+          const anchorX = bounds.minX + bounds.width / 2;
+          const anchorY = bounds.maxY;
+          const targetX = cell.x + cell.w * 0.5;
+          const targetY = cell.y + cell.h - 10;
+          if (state.forest.showFullGhost) {
+            const prevGeom = prevGeomByKey.get(thumbKey);
+            if (prevGeom) {
+              ctx.save();
+              ctx.globalAlpha = 0.08;
+              ctx.translate(targetX, targetY);
+              ctx.scale(thumbScale, thumbScale);
+              ctx.translate(-anchorX, -anchorY);
+              renderGeom(ctx, prevGeom, thumbScale, thumbScale);
+              ctx.restore();
+            }
+          }
+          ctx.translate(targetX, targetY);
+          ctx.scale(thumbScale, thumbScale);
+          ctx.translate(-anchorX, -anchorY);
+          renderGeom(ctx, treeGeom, thumbScale, thumbScale);
+          if (DEBUG_FOREST.showBBoxes) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(0,0,0,0.25)";
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+            ctx.restore();
+          }
+        } finally {
+          ctx.restore();
+        }
+        prevGeomByKey.set(thumbKey, treeGeom);
+        forestGeom.trees.push(treeGeom);
+        courseMetricRows.push({
+          name: course,
+          rawGrowth: growthInfo.rawGrowth,
+          growthRel,
+          targetFrac,
+          targetH,
+          availH,
+          bbox: { w: bounds.width, h: bounds.height },
+          scale: {
+            yScaleRaw,
+            widthCapScale: xScaleCap,
+            scaleFinal: thumbScale
+          }
+        });
+      });
+
+      const topByGrowthRel = courseMetricRows
+        .slice()
+        .sort((a, b) => (b.growthRel || 0) - (a.growthRel || 0))
+        .slice(0, 3)
+        .map((c) => ({ name: c.name, growthRel: c.growthRel }));
+      const topByScaleFinal = courseMetricRows
+        .slice()
+        .sort((a, b) => (b.scale?.scaleFinal || 0) - (a.scale?.scaleFinal || 0))
+        .slice(0, 3)
+        .map((c) => ({ name: c.name, scaleFinal: c.scale?.scaleFinal || 0 }));
+
+      MetricsReporter.report({
+        mode: focusMode,
+        selectedCourse: focusCourse || null,
+        canvas: { w: forestCanvas.width, h: forestCanvas.height },
+        normalization: normalizationSnapshot,
+        courses: courseMetricRows,
+        top: { byGrowthRel: topByGrowthRel, byScaleFinal: topByScaleFinal }
+      });
+
+      applyOrderedDither(ctx, w, h, 0.035);
+      lastForestGeom = forestGeom;
+      renderForestLegend(perCourse, courses, weekId);
+      renderScaleDebug(focusCourse);
+      return;
+    }
+
     courses.forEach((course, idx) => {
-      const x0 = spacing * (idx + 1);
+      const cell = cells[idx];
+      const x0 = cell ? (cell.x + cell.w * 0.5) : (w / (courses.length + 1)) * (idx + 1);
       const metrics = perCourse[course] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
-      const maxMetrics = (state.forest.perCourseMax || {})[course] || {};
-      const useMetrics = simulateMax ? {
-        words: maxMetrics.words ?? metrics.words,
-        recursion: maxMetrics.recursion ?? metrics.recursion,
-        abstraction: maxMetrics.abstraction ?? metrics.abstraction,
-        cohesion: maxMetrics.cohesion ?? metrics.cohesion,
-        argument: maxMetrics.argument ?? metrics.argument,
-        diversity: maxMetrics.diversity ?? metrics.diversity,
-        tasks: maxMetrics.tasks ?? metrics.tasks
-      } : metrics;
-      const wordsN = clamp((useMetrics.words || 0) / currentMax.words, 0, 1);
-      const recursionN = clamp((useMetrics.recursion || 0) / currentMax.recursion, 0, 1);
-      const abstractionN = clamp((useMetrics.abstraction || 0) / currentMax.abstraction, 0, 1);
-      const cohesionN = clamp((useMetrics.cohesion || 0) / currentMax.cohesion, 0, 1);
-      const argumentN = clamp((useMetrics.argument || 0) / currentMax.argument, 0, 1);
-      const diversityN = clamp((useMetrics.diversity || 0) / currentMax.diversity, 0, 1);
-      const tasksN = clamp((useMetrics.tasks || 0) / currentMax.tasks, 0, 1);
-      const stress = clamp(metrics.stress || 0, 0, 1);
+      const eff = effectiveSignalsByCourse[course] || {};
+      const wordsN = eff.wordsN ?? 0;
+      const recursionN = eff.recursionN ?? 0;
+      const abstractionN = eff.abstractionN ?? 0;
+      const cohesionN = eff.cohesionN ?? 0;
+      const argumentN = eff.argumentN ?? 0;
+      const diversityN = eff.diversityN ?? 0;
+      const tasksN = eff.tasksN ?? 0;
+      const stress = clamp(eff.stress ?? metrics.stress ?? 0, 0, 1);
 
       const noteText = state.courseNotes?.[course]?.notes || "";
+      const seedBase = `${course}|${weekStartKey}|${seedSalt}`;
+      const effortAbs = effortAbsByCourse[course] || 0;
       const keywordCount = courseKeywords(course).size;
       const phraseCount = keyPhrases(noteText, 8).length;
       const conceptN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
 
-      const weeklyScore = weeklyScoreForCourse(course, weekId);
-      const weeklyScoreN = simulateMax ? 1 : clamp(weeklyScore.score || 0, 0, 1);
-      const weekendDone = state.weekendTasks.filter(t => t.course === course && t.done).length;
-      const weekendTotal = Math.max(1, state.weekendTasks.filter(t => t.course === course).length);
-      const weekendScoreN = simulateMax ? 1 : clamp(weekendDone / weekendTotal, 0, 1);
+      const weeklyScoreN = eff.weeklyScoreN ?? 0;
+      const weekendScoreN = eff.weekendScoreN ?? 0;
 
       const isGcas = /gcas/i.test(course);
       const heightScale = isGcas ? 1 : 0.7;
@@ -3135,52 +5810,239 @@
         : 0;
       const crownSpread = clamp(1.0 + 1.4 * weekendScoreN * canopyBoost + 0.7 * abstractionN, 1.0, 4.0);
       const dayLight = clamp(0.45 + 0.7 * mode.dailyRatio, 0.3, 1.1);
+      const growthEntry = growthNorm.byCourseId.get(course) || {};
+      const growthInfo = growthEntry.growthInfo || getGrowthN({});
+      const growthN = growthInfo.value;
+      const growthRel = growthRelFinalByCourse[course] ?? 0;
+      const sproutN = clamp(smoothstep(0.0, 0.18, growthRel), 0, 1);
+      const isSprout = !simulateMax && growthRel < 0.18;
+      const rel = growthEntry.rel ?? 0;
 
-      drawTree(ctx, {
-        x0,
-        baseY,
-        height,
-        trunkW: 0.4 + 1.4 * argumentN,
-        branchiness,
-        leaves,
-        crownSpread,
-        stress,
-        padT,
-        padL,
-        padR,
-        w,
-        dayLight,
-        recursionN,
-        abstractionN,
-        cohesionN,
-        argumentN,
-        diversityN,
-        tasksN,
-        wordsN,
-        conceptN,
-        weeklyScoreN,
-        weekendScoreN,
-        noteText,
-        recursion: metrics.recursion || 0,
-        abstraction: metrics.abstraction || 0,
-        cohesion: metrics.cohesion || 0,
-        argument: metrics.argument || 0,
-        diversity: metrics.diversity || 0,
-        complexityN,
-        seedKey: `${weekId}|${course}`,
+      const gridKey = getGeomCacheKey(course, flags, eff, growthRel, weekId, dayKey, "grid", seedSalt);
+      let treeGeom = geomCache.get(gridKey);
+      if (!treeGeom) {
+        treeGeom = drawTree(ctx, {
+          x0,
+          baseY,
+          height,
+          trunkW: 0.4 + 1.4 * argumentN,
+          branchiness,
+          leaves,
+          crownSpread,
+          stress,
+          padT,
+          padL,
+          padR,
+          w,
+          dayLight,
+          recursionN,
+          abstractionN,
+          cohesionN,
+          argumentN,
+          diversityN,
+          tasksN,
+          wordsN,
+          conceptN,
+          weeklyScoreN,
+          weekendScoreN,
+          noteText,
+          recursion: eff.recursion ?? metrics.recursion ?? 0,
+          abstraction: eff.abstraction ?? metrics.abstraction ?? 0,
+          cohesion: eff.cohesion ?? metrics.cohesion ?? 0,
+          argument: eff.argument ?? metrics.argument ?? 0,
+          diversity: eff.diversity ?? metrics.diversity ?? 0,
+          complexityN,
+          seedKey: seedBase,
+          course,
+          mode,
+          captureOnly: true,
+          courseId: course,
+          debug: DEBUG_FOREST,
+          growthRel,
+          effortAbs,
+          effortTotal,
+          idleMode,
+          sproutN,
+          isSprout
+        });
+        geomCache.set(gridKey, treeGeom);
+      }
+
+      if (!cell) return;
+      treeGeom.courseId = course;
+      const trunkMetrics = treeGeom.trunkMetrics || {};
+      const morphStats = treeGeom.morphStats || {};
+      const bounds = computeGeomBounds(treeGeom);
+      treeGeom.bounds = bounds;
+      treeGeom.cell = cell;
+
+      const targetFrac = targetFracForGrowth(growthRel, idleMode);
+      const availH = Math.max(1, cell.h - 16 - 10);
+      const targetH = availH * targetFrac;
+      const yScaleRaw = targetH / Math.max(1e-6, bounds.height);
+      const xScaleCap = (0.92 * cell.w) / Math.max(1e-6, bounds.width);
+      const minS = 0.7;
+      const maxS = 3.4;
+      const widthLimited = yScaleRaw > xScaleCap;
+      const xScale = clamp(Math.min(yScaleRaw, xScaleCap), minS, maxS);
+      const yScale = xScale;
+      const appliedAniso = 1;
+      const scaleFinal = Math.min(xScale, yScale);
+      lastScaleStats[course] = {
         course,
-        mode
-      }, geom);
+        growthN,
+        rel,
+        growthRel,
+        minRaw: growthNorm.minRaw,
+        maxRaw: growthNorm.maxRaw,
+        rawGrowth: growthInfo.rawGrowth,
+        weekly: growthInfo.weekly,
+        tasksTerm: growthInfo.tasksTerm,
+        wordsTerm: growthInfo.wordsTerm,
+        recursion: growthInfo.recursion,
+        cohesion: growthInfo.cohesion,
+        trunkBudgetSteps: trunkMetrics.trunkBudgetSteps,
+        trunkStep: trunkMetrics.trunkStep,
+        trunkLenMult: trunkMetrics.trunkLenMult,
+        effortAbs,
+        effortTotal,
+        idleMode: !!idleMode,
+        isSprout,
+        sproutN,
+        desiredPx: Math.min(STROKE_BASE_PX, isSprout ? 0.9 : 1.6),
+        recDepth: morphStats.recDepth,
+        branchProb: morphStats.branchProb,
+        clusterProb: morphStats.clusterProb,
+        segmentsDrawn: morphStats.segmentsDrawn,
+        branchEvents: morphStats.branchEvents,
+        flatNorm: !!growthNorm.flat,
+        normRange: growthNorm.range,
+        normMode: growthNorm.flat ? "absolute-fallback" : "relative",
+        targetFrac,
+        availH,
+        bboxH: bounds.height,
+        targetH,
+        yScaleRaw,
+        xScale,
+        yScale,
+        appliedAniso,
+        widthLimited,
+        anchorX: bounds.minX + bounds.width / 2,
+        anchorY: bounds.maxY,
+        targetX: cell.x + cell.w * 0.5,
+        targetY: cell.y + cell.h - 10,
+        scaleFinal,
+        widthCapScale: xScaleCap
+      };
+      courseMetricRows.push({
+        name: course,
+        rawGrowth: growthInfo.rawGrowth,
+        growthRel,
+        targetFrac,
+        targetH,
+        availH,
+        bbox: { w: bounds.width, h: bounds.height },
+        scale: {
+          yScaleRaw,
+          widthCapScale: xScaleCap,
+          xScale,
+          yScale,
+          appliedAniso,
+          widthLimited,
+          scaleFinal
+        },
+        trunk: {
+          trunkBudgetSteps: trunkMetrics.trunkBudgetSteps,
+          trunkStep: trunkMetrics.trunkStep,
+          trunkLenMult: trunkMetrics.trunkLenMult
+        }
+      });
+      if (DEBUG_SCALE) {
+        console.log("grid-scale", {
+          course,
+          growthN,
+          bboxH: bounds.height,
+          targetH,
+          scaleRaw,
+          scaleFinal
+        });
+      }
+
+      const anchorX = bounds.minX + bounds.width / 2;
+      const anchorY = bounds.maxY;
+      const targetX = cell.x + cell.w * 0.5;
+      const targetY = cell.y + cell.h - 10;
+      ctx.save();
+      try {
+        ctx.translate(targetX, targetY);
+        ctx.scale(xScale, yScale);
+        ctx.translate(-anchorX, -anchorY);
+        if (state.forest.showFullGhost) {
+          const prevGeom = prevGeomByKey.get(gridKey);
+          if (prevGeom) {
+            ctx.save();
+            ctx.globalAlpha = 0.12;
+            renderGeom(ctx, prevGeom, xScale, yScale);
+            ctx.restore();
+          }
+        }
+        renderGeom(ctx, treeGeom, xScale, yScale);
+        renderLeaves(ctx, treeGeom, treeGeom.seedKey || `${weekId}|${course}`, treeGeom.leafSettings);
+        if (DEBUG_FOREST.showBBoxes) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(0,0,0,0.35)";
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(bounds.minX, bounds.minY, bounds.width, bounds.height);
+          ctx.restore();
+        }
+      } finally {
+        ctx.restore();
+      }
+      prevGeomByKey.set(gridKey, treeGeom);
+      forestGeom.trees.push(treeGeom);
+
+      if (cell) {
+        ctx.save();
+        ctx.fillStyle = "#000000";
+        ctx.globalAlpha = 1;
+        ctx.font = "600 12px " + getCSSVar("--sans");
+        ctx.textAlign = "center";
+        const labelX = cell.x + cell.w / 2;
+        const labelY = Math.min(h - 8, cell.labelY);
+        ctx.fillText(course, labelX, labelY);
+        ctx.restore();
+      }
+    });
+
+    const topByGrowthRel = courseMetricRows
+      .slice()
+      .sort((a, b) => (b.growthRel || 0) - (a.growthRel || 0))
+      .slice(0, 3)
+      .map((c) => ({ name: c.name, growthRel: c.growthRel }));
+    const topByScaleFinal = courseMetricRows
+      .slice()
+      .sort((a, b) => (b.scale?.scaleFinal || 0) - (a.scale?.scaleFinal || 0))
+      .slice(0, 3)
+      .map((c) => ({ name: c.name, scaleFinal: c.scale?.scaleFinal || 0 }));
+
+    MetricsReporter.report({
+      mode: focusMode,
+      selectedCourse: focusCourse || null,
+      canvas: { w: forestCanvas.width, h: forestCanvas.height },
+      normalization: normalizationSnapshot,
+      courses: courseMetricRows,
+      top: { byGrowthRel: topByGrowthRel, byScaleFinal: topByScaleFinal }
     });
 
     applyOrderedDither(ctx, w, h, 0.035);
-    lastForestGeom = geom;
+    lastForestGeom = forestGeom;
     renderForestLegend(perCourse, courses, weekId);
+    renderScaleDebug();
   }
 
   function drawGhostForest(ctx, w, h, padL, padR, baseY, overrideGhost = null) {
     if (!overrideGhost && isMondayAfterNoonET()) return;
-    const current = isoWeekId(new Date());
+    const current = currentWeekId();
     const prev = prevIsoWeekId(current);
     const ghost = overrideGhost || loadGhostSnapshot(prev);
     if (!ghost) return;
@@ -3218,6 +6080,8 @@
     if (!lastForestGeom) return;
     try {
       const data = {
+        version: GEN_VERSION,
+        simulateMax: !!state.forest.simulateMax,
         weekId,
         trees: lastForestGeom.trees.map(tree => ({
           course: tree.course,
@@ -3232,7 +6096,11 @@
     try {
       const raw = localStorage.getItem(`${STORAGE_KEY}_ghost_${weekId}`);
       if (!raw) return null;
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.weekId !== weekId) return null;
+      if (parsed.version !== GEN_VERSION) return null;
+      if (!!parsed.simulateMax !== !!state.forest.simulateMax) return null;
+      return parsed;
     } catch {
       return null;
     }
@@ -3304,6 +6172,13 @@
       step,
       sigHash: baseHash,
       seedKey: String(signature || ""),
+      leavesEnabled: true,
+      leafBasePx: 1.4,
+      leafBurstMult: 1.6,
+      leafTrunkMult: 0.7,
+      leafMinDist: 8,
+      leafCoreSuppression: 0.5,
+      leafMaxPerTree: 900,
       features: {
         recursionN,
         abstractionN,
@@ -3329,6 +6204,9 @@
         occGain: 0.6, // avoidance turn gain
         occDecay: 0.08, // per-step local decay
         maxInternodePx: 22, // cap for internode length
+        // BEGIN PATCH: node cadence uses distance not substep count
+        nodeSpacingPx: 20, // base node spacing for branch events
+        // END PATCH
         recursionBudgetBase: 2600, // total segment budget per tree
         clusterProbability: 0.14, // probability to start a cluster burst
         clusterBurstSteps: 28, // steps for burst mode
@@ -3420,15 +6298,16 @@
     return angleDelta(dir, toward) * strength * gain;
   }
 
-  function drawLSystem(ctx, start, angle, spec, leafPoints, ink, geom, minY, runScale = 1, collision = null) {
+  function drawLSystem(ctx, start, angle, spec, leafPoints, ink, geom, minY, runScale = 1, collision = null, captureOnly = false) {
     const stack = [];
     let x = start.x;
     let y = start.y;
     let dir = angle;
     let s = 0;
-    const step = spec.step;
+    let step = spec.step;
     const maxRun = Math.max(200, Math.round(5000 * clamp(runScale, 0.1, 1)));
     const seq = expandLSystem(spec.axiom, spec.rules, spec.iterations, 20000, maxRun);
+    const shouldDraw = !captureOnly;
 
     const wind = spec.winding || {
       baseTurnRate: 0.04,
@@ -3443,6 +6322,9 @@
       occGain: 0.6,
       occDecay: 0.08,
       maxInternodePx: 22,
+      // BEGIN PATCH: node cadence uses distance not substep count
+      nodeSpacingPx: 20,
+      // END PATCH
       recursionBudgetBase: 2600,
       clusterProbability: 0.14,
       clusterBurstSteps: 28,
@@ -3469,6 +6351,47 @@
       argumentN: 0.5,
       diversityN: 0.5
     };
+    const effortAbs = clamp(spec.effortAbs ?? 0, 0, 1);
+    const effortGate = clamp(spec.effortGate ?? effortAbs, 0, 1);
+    const idleMode = !!spec.idleMode;
+    const sproutMode = !!spec.sproutMode;
+    const isSprout = !!spec.isSprout;
+    const sproutN = clamp(spec.sproutN ?? 0, 0, 1);
+    const growthRel = clamp(spec.growthRel ?? 0, 0, 1);
+    const sproutT = clamp(growthRel / 0.18, 0, 1);
+    const branchGate = clamp(spec.branchGate ?? effortGate, 0.01, 1);
+    const clusterGate = clamp(spec.clusterGate ?? effortGate, 0.005, 1);
+    const trunkBudgetSteps = isSprout
+      ? clamp(lerpInt(10, 18, sproutT), 8, 22)
+      : Math.round(40 + (95 - 40) * effortGate) + Math.round(25 * (features.recursionN || 0) * effortGate);
+    const trunkLenMult = isSprout
+      ? lerp(0.55, 0.85, sproutN)
+      : (1.05 + (1.55 - 1.05) * effortGate);
+    const trunkTierEvery = Math.round(10 + (14 - 10) * seededRandom(spec.seedKey || "", "trunk-tier"));
+    const courseId = spec.courseId || "";
+    const conceptId = spec.conceptId ?? null;
+    // BEGIN PATCH: trunk → burst → trunk state machine
+    const stateMachine = spec.stateMachine || null;
+    let state = stateMachine?.startState || "BURST";
+    if (isSprout) state = "TRUNK";
+    let burstRemaining = state === "BURST" ? (stateMachine?.burstDurationSteps ?? 160) : 0;
+    let burstBudgetApplied = false;
+    let stepDecay = 1;
+    let recoveryRemaining = (stateMachine?.startState === "TRUNK" && stateMachine?.recoverySteps) ? stateMachine.recoverySteps : 0;
+    let austerityRemaining = 0;
+    const burstSchedule = Array.isArray(stateMachine?.burstSchedule) ? [...stateMachine.burstSchedule].sort((a,b)=>a-b) : null;
+    let burstIndex = 0;
+    const burstAxisFallback = seededRandom(spec.seedKey || "", "burst-axis") * Math.PI * 2;
+    const trunkHeading = (typeof spec.trunkHeading === "number") ? spec.trunkHeading : angle;
+    const burstAxisAngle = lerpAngle(stateMachine?.burstAxisAngle ?? burstAxisFallback, trunkHeading, 0.4);
+    const enterBurst = () => {
+      if (isSprout) return;
+      state = "BURST";
+      burstRemaining = stateMachine?.burstDurationSteps ?? 160;
+      burstBudgetApplied = false;
+      stepDecay = 1;
+    };
+    // END PATCH
 
     // Metric mapping (transparent):
     // - expositionScore uses cohesion + abstraction + recursion -> symmetric zones, higher symmetryStrength, denser clustering
@@ -3484,10 +6407,42 @@
     let branchId = 0;
     let branchSign = seededRandom(spec.seedKey || "", `branch:${branchId}`) < 0.5 ? -1 : 1;
     let branchSerial = 0;
-    let stepsSinceNode = 0;
+    // BEGIN PATCH: node cadence uses distance not substep count
+    let distSinceNode = 0;
+    let distSinceTwig = 0;
+    let stepsSinceBranch = 0;
+    let subStepCount = 0;
+    let burstBandNorm = 1;
+    const recentAngles = [];
+    let lastBranchOrigin = null;
+    // END PATCH
     const headingHistory = [];
+    let trunkStepIndex = 0;
+    const trunkStepsTotal = Math.max(1, stateMachine?.trunkStepsTotal || maxRun);
 
+    // BEGIN PATCH: leaf points for post-pass leaves
+    const pushLeafPoint = (lx, ly, weight = 1) => {
+      if (!Array.isArray(leafPoints)) return;
+      const leafState = stateMachine ? (state === "BURST" ? "BURST" : "TRUNK") : "TRUNK";
+      if (leafState === "TRUNK" && austerityRemaining > 0) return;
+      leafPoints.push({
+        x: lx,
+        y: ly,
+        w: clamp(weight, 0.5, 1.5),
+        state: leafState,
+        bandNorm: (leafState === "BURST" && stateMachine?.burstOrigin && stateMachine?.burstMaxRadiusPx)
+          ? clamp(Math.hypot(lx - stateMachine.burstOrigin.x, ly - stateMachine.burstOrigin.y) / Math.max(1, stateMachine.burstMaxRadiusPx), 0, 1)
+          : null
+      });
+    };
+    // END PATCH
+
+    if (isSprout) step *= 0.55;
     let segmentBudget = Math.max(200, Math.round((wind.recursionBudgetBase || 2600) * (0.7 + 0.6 * runScale) * (0.55 + 0.45 * features.recursionN)));
+    if (sproutMode || isSprout) segmentBudget = Math.min(segmentBudget, 180);
+    let segmentsDrawn = 0;
+    let branchEvents = 0;
+    let sproutBranchEvents = 0;
 
     const zone = {
       type: "exploratory",
@@ -3562,9 +6517,19 @@
       let by = originY;
       let bdir = baseDir;
       let bs = 0;
-      const localNoiseScale = (zoneType === "symmetric" ? wind.noiseScale * (wind.symmetryNoiseScale || 0.8) : wind.noiseScale) * (wind.exploratoryNoiseBoost || 1.1);
-      const localNoiseAmp = wind.noiseAmp * (zoneType === "symmetric" ? 0.6 : 1.1) * (defectSide ? 1.35 : 1);
-      const branchStep = Math.min(step * lenScale, wind.maxInternodePx || step);
+      const suppressTrunk = (stateMachine && state === "TRUNK" && !TRUNK_VISIBLE);
+      const stateNoiseScale = stateMachine
+        ? (state === "BURST" ? (stateMachine?.burstNoiseScale ?? 0.55) : (stateMachine?.trunkNoiseScale ?? 0.45))
+        : 1;
+      const burstTwigScale = (stateMachine && state === "BURST") ? (stateMachine?.burstTwigStepScale ?? 0.55) : 1;
+      const localNoiseScale = (zoneType === "symmetric" ? wind.noiseScale * (wind.symmetryNoiseScale || 0.8) : wind.noiseScale) * (wind.exploratoryNoiseBoost || 1.1) * stateNoiseScale;
+      const localNoiseAmp = wind.noiseAmp * (zoneType === "symmetric" ? 0.6 : 1.1) * (defectSide ? 1.35 : 1) * stateNoiseScale;
+      const localMaxInternode = (stateMachine && state === "BURST" && typeof stateMachine.burstMaxInternodePx === "number")
+        ? stateMachine.burstMaxInternodePx
+        : ((stateMachine && state === "TRUNK" && typeof stateMachine.trunkMaxInternodePx === "number")
+          ? stateMachine.trunkMaxInternodePx
+          : (wind.maxInternodePx || step));
+      const branchStep = Math.min(step * lenScale * burstTwigScale, localMaxInternode);
 
       for (let j = 0; j < stepCount && segmentBudget > 0; j++) {
         const baseTurn = branchSign * wind.baseTurnRate * 1.2;
@@ -3576,17 +6541,32 @@
         const nx = bx + Math.cos(bdir) * branchStep;
         const ny = by + Math.sin(bdir) * branchStep;
 
-        ctx.beginPath();
-        ctx.moveTo(bx, by);
-        ctx.lineTo(nx, ny);
-        ctx.stroke();
-        if (geom) {
-          geom.paths.push({ x1: bx, y1: by, x2: nx, y2: ny, stroke: ink, sw: ctx.lineWidth * 0.75, alpha: 1 });
+        if (shouldDraw && !suppressTrunk) {
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(nx, ny);
+          ctx.stroke();
         }
+        if (geom) {
+          geom.paths.push({
+            x1: bx, y1: by, x2: nx, y2: ny,
+            stroke: ink,
+            sw: suppressTrunk ? 0 : (ctx.lineWidth * 0.75),
+            alpha: suppressTrunk ? 0 : 1,
+            type: "branchlet",
+            courseId,
+            conceptId,
+            zoneType
+          });
+        }
+        segmentsDrawn += 1;
         occStamp(occ, nx, ny, wind.occDecay);
         bx = nx; by = ny; bs += branchStep;
         segmentBudget -= 1;
       }
+      // terminal point -> leaf candidate
+      const leafWeight = clamp(0.6 + lenScale * 0.8, 0.5, 1.5);
+      pushLeafPoint(bx, by, leafWeight);
     }
 
     const cluster = { remaining: 0, queue: [], sideBias: 0 };
@@ -3604,6 +6584,30 @@
       }
     }
 
+    const noteBranchEvent = (theta = null, origin = null) => {
+      if (stateMachine && state === "BURST") {
+        stepsSinceBranch = 0;
+        if (typeof theta === "number" && isFinite(theta)) {
+          recentAngles.push(Math.abs(theta));
+          if (recentAngles.length > 6) recentAngles.shift();
+        }
+        if (origin && typeof origin.x === "number" && typeof origin.y === "number") {
+          lastBranchOrigin = { x: origin.x, y: origin.y };
+        }
+      }
+    };
+
+    const pickRecentAngle = (salt) => {
+      if (!recentAngles.length) return null;
+      const total = recentAngles.reduce((sum, _, i) => sum + (i + 1), 0);
+      let r = seededRandom(spec.seedKey || "", `mem:${salt}:${Math.floor(s)}`) * total;
+      for (let i = 0; i < recentAngles.length; i++) {
+        r -= (i + 1);
+        if (r <= 0) return recentAngles[i];
+      }
+      return recentAngles[recentAngles.length - 1];
+    };
+
     function spawnClusterQueue(dirNow) {
       cluster.queue.forEach((item) => { item.delay -= 1; });
       const ready = cluster.queue.filter(item => item.delay <= 0);
@@ -3616,12 +6620,43 @@
           branchSerial += 1;
           drawBranchlet(x, y, branchDir, 0.85, 6 + Math.floor(seededRandom(spec.seedKey || "", `cluster-len:${branchSerial}`) * 6), branchSerial, zone.type, side);
         }
-        stepsSinceNode = 0;
+        noteBranchEvent(null, { x, y });
+        // BEGIN PATCH: node cadence uses distance not substep count
+        distSinceNode = 0;
+        distSinceTwig = 0;
+        // END PATCH
       });
     }
 
     function spawnBranchEvent(dirNow, force, sideBias = 0) {
       if (segmentBudget <= 0) return;
+      branchEvents += 1;
+      if (isSprout) sproutBranchEvents += 1;
+      if (stateMachine && state === "BURST") {
+        const axis = burstAxisAngle;
+        const thetaSet = (burstBandNorm < 0.45 ? [18, 27] : [18, 27, 36]).map(d => d * (Math.PI / 180));
+        let thetaPick = thetaSet[Math.floor(seededRandom(spec.seedKey || "", `burst-theta:${branchId}:${Math.floor(s)}`) * thetaSet.length)] || (18 * Math.PI / 180);
+        if (recentAngles.length && seededRandom(spec.seedKey || "", `burst-theta-bias:${branchId}:${Math.floor(s)}`) < 0.8) {
+          thetaPick = pickRecentAngle(`burst-theta-mem:${branchId}`) || thetaPick;
+        }
+        const jitter = ((seededRandom(spec.seedKey || "", `burst-theta-jitter:${branchId}:${Math.floor(s)}`) - 0.5) * 2) * (1 * (Math.PI / 180));
+        const theta = thetaPick + jitter;
+        const defectSeed = seededRandom(spec.seedKey || "", `burst-defect:${branchId}:${Math.floor(s)}`);
+        const skipLeft = defectSeed < 0.04;
+        const skewRight = defectSeed >= 0.04 && defectSeed < 0.08;
+        const leftDir = axis - theta;
+        const rightDir = axis + theta + (skewRight ? (2 * (Math.PI / 180)) : 0);
+        if (!skipLeft) {
+          branchSerial += 1;
+          drawBranchlet(x, y, leftDir, 0.75, 6, branchSerial, "symmetric", -1);
+        }
+        if (defectSeed >= 0.02) {
+          branchSerial += 1;
+          drawBranchlet(x, y, rightDir, 0.75, 6, branchSerial, "symmetric", 1);
+        }
+        noteBranchEvent(thetaPick, { x, y });
+        return;
+      }
       const axis = lerpAngle(dirNow, zone.symmetryAxisAngle, zone.symmetryStrength);
       const alpha = symAngles[Math.floor(seededRandom(spec.seedKey || "", `alpha:${branchId}:${Math.floor(s)}`) * symAngles.length)] || (18 * Math.PI / 180);
       const pair = zone.type === "symmetric";
@@ -3647,7 +6682,7 @@
         branchSerial += 1;
         drawBranchlet(x, y, dirNow + side * alpha, 0.8, 6, branchSerial, zone.type, side);
       }
-      stepsSinceNode = 0;
+      noteBranchEvent();
     }
 
     startZone(zone.type, dir, s);
@@ -3661,20 +6696,77 @@
       if (ch === "F") {
         const depth = stack.length;
         const taper = Math.max(0.2, 0.9 - depth * (spec.taperRate || 0.06));
-        ctx.lineWidth = 0.6 * taper * (zone.type === "symmetric" ? 1.05 : 0.9);
+        const baseStrokeW = 0.6 * taper * (zone.type === "symmetric" ? 1.05 : 0.9);
 
         const stepCap = wind.maxInternodePx || step;
         const subSteps = Math.max(1, Math.ceil(step / stepCap));
         const baseSubStep = step / subSteps;
 
         for (let sub = 0; sub < subSteps && segmentBudget > 0; sub++) {
+          subStepCount += 1;
           const scores = updateZone(dir, s);
+          // BEGIN PATCH: trunk → burst → trunk state machine
+          if (burstSchedule && state === "TRUNK" && burstIndex < burstSchedule.length && s >= burstSchedule[burstIndex] && trunkStepIndex >= trunkBudgetSteps) {
+            enterBurst();
+            burstIndex += 1;
+          }
+          const isBurst = state === "BURST";
+          if (!isBurst) burstBandNorm = 1;
+          if (isBurst && !burstBudgetApplied) {
+            segmentBudget += stateMachine?.burstBudgetBonus ?? 240;
+            burstBudgetApplied = true;
+          }
+          if (stateMachine) {
+            zone.type = isBurst ? "symmetric" : "exploratory";
+          }
           const expoBoost = 0.6 + 0.8 * scores.expositionScore;
           const transBoost = 0.6 + 0.8 * scores.transitionScore;
+          let branchProbScale = stateMachine
+            ? (isBurst ? (stateMachine?.burstBranchProbScale ?? 2.6) : (stateMachine?.trunkBranchProbScale ?? 0.2))
+            : 1;
+          let clusterProbScale = stateMachine
+            ? (isBurst ? (stateMachine?.burstClusterProbScale ?? 1.6) : (stateMachine?.trunkClusterProbScale ?? 0.2))
+            : 1;
+          if (isSprout) {
+            branchProbScale *= 0.25 * 1.35;
+            branchProbScale = Math.min(branchProbScale, 0.55);
+            clusterProbScale *= 0.15;
+          }
+          let trunkLenScale = 1;
+          // END PATCH
 
-          const localNoiseAmp = wind.noiseAmp * (zone.type === "symmetric" ? 0.6 : (wind.exploratoryNoiseBoost || 1.35)) * (cluster.remaining > 0 ? 1.2 : 1);
-          const localNoiseScale = wind.noiseScale * (zone.type === "symmetric" ? (wind.symmetryNoiseScale || 0.8) : 1.15) * (cluster.remaining > 0 ? 1.15 : 1);
-          const baseTurn = branchSign * wind.baseTurnRate * (zone.type === "symmetric" ? 0.9 : 1.1);
+          let noiseScaleFactor = stateMachine
+            ? (isBurst ? (stateMachine?.burstNoiseScale ?? 0.6) : (stateMachine?.trunkNoiseScale ?? 0.45))
+            : 1;
+          let turnScaleFactor = stateMachine
+            ? (isBurst ? (stateMachine?.burstTurnScale ?? 0.7) : (stateMachine?.trunkTurnScale ?? 0.4))
+            : 1;
+          if (stateMachine && !isBurst) {
+            noiseScaleFactor *= 0.82;
+            turnScaleFactor *= 0.78;
+            trunkStepIndex += 1;
+            const trunkProgress = clamp(trunkStepIndex / Math.max(1, trunkBudgetSteps), 0, 1) * effortGate;
+            const trunkRamp = smoothstep(0.70, 1.0, trunkProgress);
+            branchProbScale *= (0.15 + (1.0 - 0.15) * trunkRamp);
+            clusterProbScale *= (0.10 + (1.0 - 0.10) * trunkRamp);
+            const trunkLenJitter = 0.9 + 0.2 * seededRandom(spec.seedKey || "", `trunk-len:${trunkStepIndex}:${subStepCount}`);
+            trunkLenScale = trunkLenMult * trunkLenJitter;
+          }
+          if (stateMachine && isBurst) {
+            noiseScaleFactor *= 0.7;
+            turnScaleFactor *= 0.75;
+          }
+          if (stateMachine && !isBurst && austerityRemaining > 0) {
+            noiseScaleFactor *= 0.7;
+            turnScaleFactor *= 0.7;
+            branchProbScale *= 0.55;
+            clusterProbScale *= 0.55;
+          }
+          branchProbScale *= branchGate;
+          clusterProbScale *= clusterGate;
+          const localNoiseAmp = wind.noiseAmp * (zone.type === "symmetric" ? 0.6 : (wind.exploratoryNoiseBoost || 1.35)) * (cluster.remaining > 0 ? 1.2 : 1) * noiseScaleFactor;
+          const localNoiseScale = wind.noiseScale * (zone.type === "symmetric" ? (wind.symmetryNoiseScale || 0.8) : 1.15) * (cluster.remaining > 0 ? 1.15 : 1) * noiseScaleFactor;
+          const baseTurn = branchSign * wind.baseTurnRate * (zone.type === "symmetric" ? 0.9 : 1.1) * turnScaleFactor;
           const noiseTurn = noise1D(spec.seedKey || "", branchId, s, localNoiseScale) * localNoiseAmp;
           const gravityTurn = angleDelta(dir, -Math.PI / 2) * (spec.gravityBias || 0.3) * 0.03;
 
@@ -3695,7 +6787,77 @@
             : 0;
 
           // base + noise + boundary + avoidance + curvature floor (smooth winding)
-          const desiredDir = dir + baseTurn + noiseTurn + gravityTurn + boundary + densityBias + curvatureTurn;
+          let desiredDir = dir + baseTurn + noiseTurn + gravityTurn + boundary + densityBias + curvatureTurn;
+          // BEGIN PATCH: burst radius constraint + symmetry axis
+          let burstBandScale = 1;
+          let burstTwigEveryOverride = null;
+          if (stateMachine && isBurst) {
+            zone.symmetryAxisAngle = burstAxisAngle;
+            zone.symmetryStrength = Math.max(0.9, zone.symmetryStrength);
+          }
+          if (stateMachine && isBurst && stateMachine.burstOrigin && stateMachine.burstMaxRadiusPx) {
+            const ox = stateMachine.burstOrigin.x;
+            const oy = stateMachine.burstOrigin.y;
+            const dx = x - ox;
+            const dy = y - oy;
+            const dist = Math.hypot(dx, dy);
+            const radius = stateMachine.burstMaxRadiusPx;
+            const band = dist / Math.max(1, radius);
+            burstBandNorm = band;
+            if (band < 0.4) {
+              burstBandScale = 1.4;
+              burstTwigEveryOverride = 1;
+            } else if (band < 0.75) {
+              burstBandScale = 0.8;
+              burstTwigEveryOverride = 2;
+            } else {
+              burstBandScale = 0.2;
+              burstTwigEveryOverride = 5;
+            }
+            const survivalScale = clamp(0.35 + 0.65 * (1 - Math.pow(band, 1.4)), 0.35, 1);
+            clusterProbScale *= survivalScale;
+            branchProbScale *= (0.85 + 0.15 * survivalScale);
+            const toward = Math.atan2(oy - y, ox - x);
+            if (band > 0.65) {
+              const desiredRadius = radius * 0.55;
+              const radialError = dist - desiredRadius;
+              const radialPull = clamp(radialError / Math.max(1, radius), -1, 1);
+              const w = clamp((band - 0.65) / 0.35, 0, 1);
+              desiredDir += angleDelta(dir, toward) * (0.22 * radialPull * (w * w));
+            }
+            if (dist > radius) {
+              const pull = clamp((dist - radius) / radius, 0, 1);
+              const pull2 = pull * pull;
+              const outerBoost = band >= 0.75 ? 1.55 : 1;
+              desiredDir += angleDelta(dir, toward) * (0.35 + 0.95 * pull2) * outerBoost;
+            }
+          }
+          // END PATCH
+          if (stateMachine && isBurst) {
+            branchProbScale *= burstBandScale;
+            clusterProbScale *= burstBandScale;
+          }
+          if (stateMachine && !isBurst) {
+            const trunkGrav = TRUNK_GRAV + 0.06 * effortGate;
+            desiredDir = lerpAngle(desiredDir, -Math.PI / 2, trunkGrav);
+          }
+          if (stateMachine && isBurst && burstBandNorm < 0.45 && (subStepCount % 11 === 0)) {
+            desiredDir += angleDelta(dir, burstAxisAngle) * 0.1;
+          }
+          // BEGIN PATCH: burst angle quantization
+          if (stateMachine && isBurst) {
+            const delta = angleDelta(dir, desiredDir);
+            const mags = (burstBandNorm < 0.45 ? [18, 27] : [18, 27, 36]).map(d => d * (Math.PI / 180));
+            const abs = Math.abs(delta);
+            let closest = mags[0];
+            for (let mi = 1; mi < mags.length; mi++) {
+              if (Math.abs(abs - mags[mi]) < Math.abs(abs - closest)) closest = mags[mi];
+            }
+            const sign = delta === 0 ? (seededRandom(spec.seedKey || "", `burst-qd:${branchId}:${Math.floor(s)}`) < 0.5 ? -1 : 1) : Math.sign(delta);
+            const jitter = ((seededRandom(spec.seedKey || "", `burst-qj:${branchId}:${Math.floor(s)}`) - 0.5) * 2) * (1 * (Math.PI / 180));
+            desiredDir = dir + sign * closest + jitter;
+          }
+          // END PATCH
           dir = lerpAngle(dir, desiredDir, wind.headingInertiaK);
 
           if (typeof minY === "number" && y < minY + 12) {
@@ -3703,8 +6865,47 @@
           }
 
           const clusterScale = cluster.remaining > 0 ? (wind.clusterStepScale || 0.82) : 1;
-          const subStep = Math.min(baseSubStep * clusterScale, wind.maxInternodePx || baseSubStep);
+          // BEGIN PATCH: trunk → burst → trunk state machine
+          const stateStepScale = stateMachine
+            ? (isBurst ? (stateMachine?.burstStepScale ?? 0.5) : (stateMachine?.trunkStepScale ?? 1.2))
+            : 1;
+          if (stateMachine) {
+            if (isBurst) {
+              const decay = stateMachine?.burstDecay ?? 0.99;
+              stepDecay = Math.max(0.5, stepDecay * decay);
+            } else {
+              stepDecay = Math.min(1, stepDecay + 0.02);
+            }
+          }
+          const burstMaxInternodePx = stateMachine?.burstMaxInternodePx;
+          const trunkMaxInternodePx = stateMachine?.trunkMaxInternodePx;
+          const localMaxInternode = (stateMachine && isBurst && typeof burstMaxInternodePx === "number")
+            ? burstMaxInternodePx
+            : ((stateMachine && !isBurst && typeof trunkMaxInternodePx === "number")
+              ? trunkMaxInternodePx
+              : (wind.maxInternodePx || baseSubStep));
+          const minLen = (stateMachine && isBurst) ? (stateMachine?.burstMinLen ?? 2.2) : 1.2;
+          let subStep = Math.min(
+            baseSubStep * clusterScale * stateStepScale * stepDecay * trunkLenScale,
+            localMaxInternode
+          );
+          subStep = Math.max(minLen, subStep);
+          // END PATCH
 
+          // BEGIN PATCH: enforce net upward progress in TRUNK
+          if (stateMachine && !isBurst) {
+            const dyStep = Math.sin(dir) * subStep;
+            if (dyStep > 0 || Math.abs(dyStep) < 0.2) {
+              dir = lerpAngle(dir, -Math.PI / 2, 0.12);
+            }
+          }
+          // END PATCH
+
+          const isTrunkState = stateMachine && !isBurst;
+          const strokeW = isTrunkState
+            ? (TRUNK_VISIBLE ? baseStrokeW * 1.2 : 0)
+            : baseStrokeW;
+          ctx.lineWidth = strokeW;
           let nx = x + Math.cos(dir) * subStep;
           let ny = y + Math.sin(dir) * subStep;
 
@@ -3716,57 +6917,189 @@
             ny = y + Math.sin(dir) * subStep * 0.6;
           }
 
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(nx, ny);
-          ctx.stroke();
+          if (shouldDraw && strokeW > 0) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(nx, ny);
+            ctx.stroke();
+          }
           if (geom) {
             geom.paths.push({
               x1: x, y1: y, x2: nx, y2: ny,
               stroke: ink,
-              sw: ctx.lineWidth,
-              alpha: 1
+              sw: strokeW,
+              alpha: strokeW > 0 ? 1 : 0,
+              type: "branch",
+              courseId,
+              conceptId,
+              zoneType: zone.type
             });
           }
+          segmentsDrawn += 1;
 
+          const ds = Math.hypot(nx - x, ny - y);
           occStamp(occ, nx, ny, wind.occDecay);
-          x = nx; y = ny; s += subStep; stepsSinceNode += 1; segmentBudget -= 1;
+          x = nx; y = ny; s += ds; segmentBudget -= 1;
+
+          // BEGIN PATCH: node cadence uses distance not substep count
+          distSinceNode += ds;
+          distSinceTwig += ds;
+          // END PATCH
+          if (isSprout) {
+            stepsSinceBranch += 1;
+          } else if (stateMachine && isBurst) {
+            stepsSinceBranch += 1;
+          } else if (stateMachine && !isBurst) {
+            stepsSinceBranch = 0;
+          }
 
           if (cluster.remaining > 0) {
             cluster.remaining -= 1;
             spawnClusterQueue(dir);
           }
 
-          const nodeInterval = Math.max(wind.minBranchEverySteps || 4, Math.round((wind.maxInternodePx || 20) / Math.max(1, subStep)));
-          const clusterChance = wind.clusterProbability * (zone.type === "symmetric" ? expoBoost : transBoost);
+          let clusterChance = wind.clusterProbability * (zone.type === "symmetric" ? expoBoost : transBoost) * clusterProbScale;
+          if (stateMachine && isBurst) {
+            clusterChance *= (0.7 + 0.6 * features.recursionN);
+          }
+          if (sproutMode || isSprout) clusterChance = 0;
           const clusterSeed = seededRandom(spec.seedKey || "", `cluster-trigger:${branchId}:${Math.floor(s)}`);
           if (cluster.remaining <= 0 && clusterSeed < clusterChance && segmentBudget > 60) {
             startCluster();
           }
 
-          if (zone.type === "symmetric" && stepsSinceNode % zone.twigEvery == 0) {
-            spawnBranchEvent(dir, false, 0);
+          // BEGIN PATCH: node cadence uses distance not substep count
+          const baseNodeSpacing = wind.nodeSpacingPx || 20;
+          let nodeSpacingPx = baseNodeSpacing;
+          const hasExplicitNodeSpacing = stateMachine && (
+            (isBurst && typeof stateMachine.burstNodeSpacingPx === "number") ||
+            (!isBurst && typeof stateMachine.trunkNodeSpacingPx === "number")
+          );
+          if (stateMachine) {
+            if (isBurst && typeof stateMachine.burstNodeSpacingPx === "number") {
+              nodeSpacingPx = stateMachine.burstNodeSpacingPx;
+            } else if (!isBurst && typeof stateMachine.trunkNodeSpacingPx === "number") {
+              nodeSpacingPx = stateMachine.trunkNodeSpacingPx;
+            } else {
+              nodeSpacingPx *= isBurst ? 0.7 : 1.4;
+            }
+          }
+          if (!hasExplicitNodeSpacing) {
+            if (zone.type === "symmetric") nodeSpacingPx *= 0.45;
+            if (cluster.remaining > 0) nodeSpacingPx *= 0.8;
+          }
+          const maxNodeSpacing = (stateMachine && !isBurst) ? 26 : baseNodeSpacing;
+          nodeSpacingPx = clamp(nodeSpacingPx, 4, maxNodeSpacing);
+          const twigEvery = (stateMachine && isBurst) ? (burstTwigEveryOverride ?? 1) : 999;
+          const twigSpacingPx = Math.max(4, nodeSpacingPx * Math.max(1, twigEvery));
+          if (isSprout) nodeSpacingPx = clamp(nodeSpacingPx, 6, 12);
+
+          if (zone.type === "symmetric") {
+            while (distSinceTwig >= twigSpacingPx) {
+              spawnBranchEvent(dir, false, 0);
+              distSinceTwig -= twigSpacingPx;
+            }
           }
 
-          if (stepsSinceNode >= nodeInterval) {
-            spawnBranchEvent(dir, true, 0);
-          } else {
+          let spawnedNode = false;
+          if (!sproutMode || isSprout) {
+            while (distSinceNode >= nodeSpacingPx) {
+              spawnBranchEvent(dir, true, 0);
+              distSinceNode -= nodeSpacingPx;
+              spawnedNode = true;
+            }
+          }
+          if (!spawnedNode) {
             const spawnSeed = seededRandom(spec.seedKey || "", `spawn:${branchId}:${Math.floor(s)}`);
-            const spawnProb = zone.type === "symmetric" ? 0.06 * expoBoost : 0.08 * transBoost;
-            if (spawnSeed < spawnProb && segmentBudget > 40) {
+            const spawnProb = (zone.type === "symmetric" ? 0.06 * expoBoost : 0.08 * transBoost) * branchProbScale;
+            if ((!sproutMode || isSprout) && spawnSeed < spawnProb && segmentBudget > 40) {
               spawnBranchEvent(dir, false, 0);
             }
           }
+          if (isSprout && stepsSinceBranch >= 4 && segmentBudget > 20) {
+            if (sproutBranchEvents === 0) {
+              spawnBranchEvent(dir, true, 1);
+              spawnBranchEvent(dir, true, -1);
+            } else {
+              spawnBranchEvent(dir, true, 0);
+            }
+            stepsSinceBranch = 0;
+          }
+          // BEGIN PATCH: trunk stacked tiers
+          if (stateMachine && !isBurst && !sproutMode && trunkTierEvery > 0 && trunkStepIndex > 0 && (trunkStepIndex % trunkTierEvery === 0) && segmentBudget > 20) {
+            const tierTheta = (18 + 12 * seededRandom(spec.seedKey || "", `trunk-tier-theta:${trunkStepIndex}`)) * (Math.PI / 180);
+            const tierLenScale = 0.35 + 0.2 * seededRandom(spec.seedKey || "", `trunk-tier-len:${trunkStepIndex}`);
+            const tierSteps = 2 + Math.floor(seededRandom(spec.seedKey || "", `trunk-tier-steps:${trunkStepIndex}`) * 2);
+            branchSerial += 1;
+            drawBranchlet(x, y, dir + tierTheta, tierLenScale, tierSteps, branchSerial, "exploratory", 0);
+            branchSerial += 1;
+            drawBranchlet(x, y, dir - tierTheta, tierLenScale, tierSteps, branchSerial, "exploratory", 0);
+          }
+          // END PATCH
+          if (stateMachine && isBurst && (subStepCount % 9 === 0)) {
+            const microThetaSet = (burstBandNorm < 0.45 ? [18, 27] : [18, 27, 36]).map(d => d * (Math.PI / 180));
+            let microTheta = microThetaSet[Math.floor(seededRandom(spec.seedKey || "", `micro-theta:${branchId}:${subStepCount}`) * microThetaSet.length)] || (18 * (Math.PI / 180));
+            if (recentAngles.length && seededRandom(spec.seedKey || "", `micro-theta-bias:${branchId}:${subStepCount}`) < 0.8) {
+              microTheta = pickRecentAngle(`micro-theta-mem:${branchId}:${subStepCount}`) || microTheta;
+            }
+            const microLenScale = 0.45 + 0.2 * seededRandom(spec.seedKey || "", `micro-len:${branchId}:${subStepCount}`);
+            const microSide = (subStepCount % 2 === 0) ? 1 : -1;
+            const microDir = burstAxisAngle + microSide * microTheta;
+            branchSerial += 1;
+            drawBranchlet(x, y, microDir, microLenScale, 1, branchSerial, "symmetric", microSide);
+            noteBranchEvent(microTheta, { x, y });
+            if (lastBranchOrigin) {
+              const crossProb = burstBandNorm < 0.45 ? 1.0 : (burstBandNorm < 0.75 ? 0.6 : 0.2);
+              if (seededRandom(spec.seedKey || "", `micro-cross:${branchId}:${subStepCount}`) < crossProb) {
+                const towardPrev = Math.atan2(lastBranchOrigin.y - y, lastBranchOrigin.x - x);
+                const crossDir = lerpAngle(towardPrev, burstAxisAngle, 0.35);
+                const crossLenScale = 0.35 + 0.2 * seededRandom(spec.seedKey || "", `micro-cross-len:${branchId}:${subStepCount}`);
+                branchSerial += 1;
+                drawBranchlet(x, y, crossDir, crossLenScale, 1, branchSerial, "symmetric", 0);
+                noteBranchEvent();
+              }
+            }
+          }
+          if (stateMachine && isBurst) {
+            const floorSteps = Math.round(18 + (8 - 18) * features.recursionN);
+            if (stepsSinceBranch > floorSteps) {
+              spawnBranchEvent(dir, true, 0);
+              stepsSinceBranch = 0;
+            }
+          }
+          if (stateMachine && state === "TRUNK" && recoveryRemaining > 0) {
+            recoveryRemaining -= 1;
+            if (recoveryRemaining <= 0) {
+              return spec.returnEnd ? { x, y, dir } : null;
+            }
+          }
+          if (state === "BURST") {
+            burstRemaining -= ds;
+            if (burstRemaining <= 0) {
+              state = "TRUNK";
+              stepDecay = 1;
+              austerityRemaining = stateMachine?.postBurstSteps ?? 22;
+            }
+          }
+          if (stateMachine && state === "TRUNK" && austerityRemaining > 0) {
+            austerityRemaining -= 1;
+          }
+          // END PATCH
         }
       } else if (ch === "+") {
         dir += spec.angle;
       } else if (ch === "-") {
         dir -= spec.angle;
       } else if (ch === "[") {
-        stack.push({ x, y, dir, branchId, branchSign, stepsSinceNode });
+        // BEGIN PATCH: node cadence uses distance not substep count
+        stack.push({ x, y, dir, branchId, branchSign, distSinceNode, distSinceTwig });
+        // END PATCH
         branchId += 1;
         branchSign = seededRandom(spec.seedKey || "", `branch:${branchId}`) < 0.5 ? -1 : 1;
-        stepsSinceNode = 0;
+        // BEGIN PATCH: node cadence uses distance not substep count
+        distSinceNode = 0;
+        distSinceTwig = 0;
+        // END PATCH
         headingHistory.length = 0;
       } else if (ch === "]") {
         if (stack.length) {
@@ -3774,14 +7107,30 @@
           x = s0.x; y = s0.y; dir = s0.dir;
           branchId = s0.branchId;
           branchSign = s0.branchSign;
-          stepsSinceNode = s0.stepsSinceNode || 0;
-          leafPoints.push({ x, y });
+          // BEGIN PATCH: node cadence uses distance not substep count
+          distSinceNode = s0.distSinceNode || 0;
+          distSinceTwig = s0.distSinceTwig || 0;
+          // END PATCH
+          pushLeafPoint(x, y, 0.9);
           headingHistory.length = 0;
         }
       }
     }
-    leafPoints.push({ x, y });
+    pushLeafPoint(x, y, 0.9);
+    if (geom && spec.isMainTrunk) {
+      geom.trunkMetrics = {
+        trunkBudgetSteps,
+        trunkStep: trunkStepIndex,
+        trunkLenMult
+      };
+    }
+    if (geom?.morphStats) {
+      geom.morphStats.segmentsDrawn = (geom.morphStats.segmentsDrawn || 0) + segmentsDrawn;
+      geom.morphStats.branchEvents = (geom.morphStats.branchEvents || 0) + branchEvents;
+    }
     ctx.restore();
+    if (spec.returnEnd) return { x, y, dir };
+    return null;
   }
 
   function drawTree(ctx, opts, forestGeom) {
@@ -3789,165 +7138,451 @@
       x0, baseY, height, trunkW, branchiness, leaves, crownSpread,
       stress, padT, padL, padR, w, dayLight, recursionN, abstractionN, cohesionN, argumentN, diversityN, tasksN, wordsN, conceptN, weeklyScoreN, weekendScoreN, noteText, recursion, abstraction, cohesion, argument, diversity,
       complexityN,
-      seedKey, course, mode
+      seedKey, course, mode,
+      effortAbs: effortAbsIn,
+      effortTotal: effortTotalIn,
+      idleMode: idleModeIn,
+      isSprout: isSproutIn,
+      sproutN: sproutNIn
     } = opts;
 
+    const captureOnly = !!opts.captureOnly;
+    const growthRel = typeof opts.growthRel === "number" ? opts.growthRel : 0;
+    const effortAbs = clamp(effortAbsIn || 0, 0, 1);
+    const effortTotal = Math.max(0, effortTotalIn || 0);
+    const idleMode = !!idleModeIn;
+    const effortGate = effortGateFor(effortAbs, idleMode);
+    const sproutN = clamp(sproutNIn ?? 0, 0, 1);
+    const isSprout = !!isSproutIn;
+    const sproutMode = idleMode || isSprout || effortGate <= 0.001;
+    const branchGate = clamp(idleMode ? 0.02 : (0.08 + 0.92 * effortGate), 0.01, 1);
+    const clusterGate = clamp(idleMode ? 0.01 : (0.06 + 0.94 * effortGate), 0.005, 1);
+    // BEGIN PATCH: debug anchor toggle (press "a")
+    if (typeof drawTree._debugAnchorsInit === "undefined" && typeof window !== "undefined") {
+      drawTree._debugAnchorsInit = true;
+      drawTree._debugAnchors = false;
+      window.addEventListener("keydown", (e) => {
+        if (String(e.key || "").toLowerCase() === "a") {
+          drawTree._debugAnchors = !drawTree._debugAnchors;
+          try { toast(drawTree._debugAnchors ? "Anchors on" : "Anchors off"); } catch {}
+        }
+      });
+    }
+    // END PATCH
+    const shouldDraw = !captureOnly;
+    const courseId = opts.courseId || course;
+    const conceptId = opts.conceptId ?? null;
     const ink = "#000000";
     const geom = {
       course,
-      paths: []
+      paths: [],
+      leafPoints: []
     };
-    forestGeom.trees.push(geom);
+    geom.seedKey = seedKey;
+    if (forestGeom?.trees) forestGeom.trees.push(geom);
 
     // No per-tree background fill to keep forest minimal
 
       // Draw trunk
       ctx.save();
-      ctx.strokeStyle = ink;
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = trunkW;
-      ctx.setLineDash([]);
+      if (shouldDraw) {
+        ctx.strokeStyle = ink;
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = trunkW;
+        ctx.setLineDash([]);
+      }
 
-      const leafPoints = [];
+      const leafPoints = geom.leafPoints;
       const maxRise = Math.min(220, Math.max(60, baseY - padT - 20));
+      const effRecursionN = recursionN * effortGate;
+      const effAbstractionN = abstractionN * (0.25 + 0.75 * effortGate);
+      const effCohesionN = cohesionN * (0.35 + 0.65 * effortGate);
+      const effArgumentN = argumentN * (0.35 + 0.65 * effortGate);
+      const effDiversityN = diversityN * (0.35 + 0.65 * effortGate);
+      const effTasksN = tasksN * effortGate;
+      const effWordsN = wordsN * effortGate;
       const lsys = buildLSystemParams({
-        recursionScore: recursionN,
-        abstractionScore: abstractionN,
-        cohesionScore: cohesionN,
-        argumentScore: argumentN,
-        diversityScore: diversityN,
-        tasksN,
+        recursionScore: effRecursionN,
+        abstractionScore: effAbstractionN,
+        cohesionScore: effCohesionN,
+        argumentScore: effArgumentN,
+        diversityScore: effDiversityN,
+        tasksN: effTasksN,
         stressN: stress,
-        wordsN
+        wordsN: effWordsN
       }, height, maxRise, `${seedKey}|${course}`);
-      const growthN = Math.max(0.06, clamp(weeklyScoreN, 0, 1));
-      const runScale = 0.1 + 0.9 * growthN;
+      if (sproutMode) {
+        lsys.iterations = Math.min(lsys.iterations, 2);
+        lsys.rules = { "F": "F[+F]F[-F]F" };
+      }
+      geom.morphStats = {
+        effortAbs,
+        effortTotal,
+        idleMode,
+        isSprout,
+        sproutN,
+        recDepth: lsys.iterations,
+        branchProb: branchGate,
+        clusterProb: clusterGate
+      };
+      geom.leafSettings = {
+        enabled: lsys.leavesEnabled !== false,
+        leafBasePx: lsys.leafBasePx ?? 1.4,
+        leafBurstMult: lsys.leafBurstMult ?? 1.6,
+        leafTrunkMult: lsys.leafTrunkMult ?? 0.7,
+        leafMinDist: lsys.leafMinDist ?? 8,
+        leafCoreSuppression: lsys.leafCoreSuppression ?? 0.5,
+        leafMaxPerTree: lsys.leafMaxPerTree ?? 900
+      };
+      lsys.courseId = courseId;
+      lsys.conceptId = conceptId;
+      if (opts.debug?.enabled) {
+        lsys.winding = lsys.winding || {};
+        if (typeof opts.debug.maxInternodePx === "number") lsys.winding.maxInternodePx = opts.debug.maxInternodePx;
+        if (typeof opts.debug.nodeSpacingPx === "number") lsys.winding.nodeSpacingPx = opts.debug.nodeSpacingPx;
+      }
+      const growthN = clamp(effortGate, 0, 1);
+      const runScale = 0.08 + 0.92 * growthN;
       const fitScale = clamp((baseY - padT - 20) / Math.max(1, height * 1.6), 0.4, 1);
       const stepJitter = 0.9 + (seededRandom(seedKey, "step") - 0.5) * 0.18;
       lsys.step *= runScale * fitScale * stepJitter;
       const heightScale = clamp(1 - (lsys.iterations - 2) * 0.12, 0.55, 1);
-      const trunkLen = height * dayLight * heightScale;
+      const trunkLenScale = sproutMode ? 0.25 : (0.35 + 0.65 * effortGate);
+      const trunkLen = height * dayLight * heightScale * trunkLenScale;
       const angleBias = 0.28 + 0.45 * (1 - weeklyScoreN);
       const angleSign = (tasksN - 0.5) >= 0 ? 1 : -1;
       const angleJitter = (seededRandom(seedKey, "angle") - 0.5) * 0.4;
       const trunkAngle = -Math.PI / 2 + angleSign * angleBias + angleJitter;
       const trunkJitter = (seededRandom(seedKey, "trunk") - 0.5) * 12;
       const trunkBaseX = clamp(x0 + trunkJitter, padL + 4, w - padR - 4);
-      const trunkTop = {
-        x: trunkBaseX + Math.cos(trunkAngle) * trunkLen,
-        y: baseY + Math.sin(trunkAngle) * trunkLen
-      };
-      trunkTop.y = Math.max(trunkTop.y, padT + 8);
-
-      ctx.beginPath();
-      ctx.moveTo(trunkBaseX, baseY);
-      ctx.lineTo(trunkTop.x, trunkTop.y);
-      ctx.stroke();
+      // BEGIN PATCH: trunk uses internode stepping polyline
+      const trunkWind = lsys.winding || {};
+      const trunkMaxStep = Math.max(2, trunkWind.maxInternodePx || lsys.step || 12);
+      const trunkStep = Math.max(2, Math.min(lsys.step || trunkMaxStep, trunkMaxStep));
+      const trunkNodeSpacing = trunkWind.nodeSpacingPx || 20;
+      let trunkDistSinceNode = 0;
+      const trunkNodes = [];
+      let tx = trunkBaseX;
+      let ty = baseY;
+      let remaining = trunkLen;
+      let trunkSegments = 0;
+      const trunkMaxSegments = 1200;
+      while (remaining > 0.001 && trunkSegments < trunkMaxSegments) {
+        let ds = Math.min(trunkStep, trunkMaxStep, remaining);
+        let nx = tx + Math.cos(trunkAngle) * ds;
+        let ny = ty + Math.sin(trunkAngle) * ds;
+        if (ny < padT + 8) {
+          ny = padT + 8;
+          ds = Math.hypot(nx - tx, ny - ty);
+          remaining = 0;
+        }
+        const t = trunkLen ? (1 - remaining / trunkLen) : 1;
+        const trunkWNow = trunkW * (0.95 - 0.45 * t);
+        if (shouldDraw && TRUNK_VISIBLE) {
+          ctx.beginPath();
+          ctx.moveTo(tx, ty);
+          ctx.lineTo(nx, ny);
+          ctx.lineWidth = trunkWNow;
+          ctx.stroke();
+        }
+        geom.paths.push({
+          x1: tx, y1: ty, x2: nx, y2: ny,
+          stroke: ink,
+          sw: TRUNK_VISIBLE ? trunkWNow : 0,
+          alpha: TRUNK_VISIBLE ? (0.33 + 0.22 * stress) : 0,
+          type: "trunk",
+          courseId,
+          conceptId,
+          zoneType: "trunk"
+        });
+        const dsActual = Math.hypot(nx - tx, ny - ty);
+        trunkDistSinceNode += dsActual;
+        if (trunkDistSinceNode >= trunkNodeSpacing) {
+          trunkNodes.push({ x: nx, y: ny });
+          trunkDistSinceNode -= trunkNodeSpacing;
+        }
+        tx = nx; ty = ny;
+        remaining -= ds;
+        trunkSegments += 1;
+      }
+      const trunkTop = { x: tx, y: ty };
+      geom.trunkNodes = trunkNodes;
       ctx.restore();
-
-      geom.paths.push({
-        d: `M ${trunkBaseX} ${baseY} L ${trunkTop.x} ${trunkTop.y}`,
-        stroke: ink,
-        sw: trunkW,
-        alpha: (0.33 + 0.22*stress),
-        fill: "none"
-      });
+      // END PATCH
       const lean = clamp((tasksN - 0.5) * 0.12 + (stress - 0.5) * 0.08 + (argumentN - 0.5) * 0.05 + angleJitter * 0.35, -0.25, 0.25);
       const collision = new Set();
-      if (growthN > 0.05) {
-        drawLSystem(ctx, trunkTop, -Math.PI / 2 + lean, lsys, leafPoints, ink, geom, padT + 8, runScale * fitScale, collision);
+      // BEGIN PATCH: trunk → burst → trunk anchors
+      const normNote = normalizeText(noteText || "");
+      const conceptTokens = normNote
+        ? Array.from(new Set([
+          ...topNWords(normNote, 6).map((x) => x.w),
+          ...keyPhrases(noteText, 6).map((p) => p.replace(/[^a-z0-9\s]/gi, "").trim()).filter(Boolean)
+        ].filter(Boolean)))
+        : [];
+      const tokenAnchorCount = normNote ? conceptTokens.length : 0;
+      const fallbackCount = clamp(5 + Math.floor(recursionN * 6), 5, 10);
+      const conceptCount = tokenAnchorCount >= 3 ? tokenAnchorCount : (trunkNodes.length ? fallbackCount : 0);
+      const anchors = [];
+      if (conceptCount && trunkNodes.length) {
+        const n = trunkNodes.length;
+        const startIdx = Math.max(0, Math.floor(n * 0.1));
+        const endIdx = Math.max(startIdx + 1, Math.floor(n * 0.9));
+        const courseCount = Math.max(1, (state?.courses || []).length || 1);
+        const cellW = w / courseCount;
+        const minAnchorDistPx = clamp(35 + cellW * 0.08, 35, 60);
+        const used = new Set();
+        let last = null;
+        let minDist = minAnchorDistPx;
+        for (let pass = 0; pass < 2 && anchors.length < conceptCount; pass++) {
+          for (let i = 0; i < conceptCount; i++) {
+            const t = (i + 1) / (conceptCount + 1);
+            const idx = Math.max(startIdx, Math.min(endIdx, Math.round(startIdx + (endIdx - startIdx) * t)));
+            if (used.has(idx)) continue;
+            const candidate = trunkNodes[idx];
+            if (!candidate) continue;
+            if (last) {
+              const d = Math.hypot(candidate.x - last.x, candidate.y - last.y);
+              if (d < minDist) continue;
+            }
+            used.add(idx);
+            anchors.push({
+              ...candidate,
+              nodeIndex: idx,
+              conceptId: tokenAnchorCount >= 3 ? (conceptTokens[i] || `concept-${i + 1}`) : `anchor-${anchors.length + 1}`
+            });
+            last = candidate;
+            if (anchors.length >= conceptCount) break;
+          }
+          minDist *= 0.7;
+        }
+      } else if (conceptCount) {
+        anchors.push({ x: trunkTop.x, y: trunkTop.y, nodeIndex: 0, conceptId: "anchor-1" });
       }
 
-      // Leaves
-      const leafCount = leaves > 0 ? Math.min(
-        1400,
-        Math.round(leaves * (26 + 32 * cohesionN + 26 * (complexityN || 0) + 32 * (weekendScoreN || 0)) * (1.0 + 0.35 * mode.dailyRatio))
-      ) : 0;
-      const autumnPalette = [
-        "#3a2c1b", "#5a3a1c", "#7a3d1a", "#9b4a1f",
-        "#b8572a", "#d26a3a", "#e07f3f", "#f29c38",
-        "#c6423a", "#a8332b", "#7f2b2b", "#612727",
-        "#8d6a3c", "#a07c43"
-      ];
-      const richness = clamp((recursion + abstraction + cohesion) / 3 + (complexityN || 0) * 0.35, 0, 1);
-      const paletteCount = Math.max(3, Math.round(3 + richness * (autumnPalette.length - 5)));
-      const stressMix = clamp(stress, 0, 1) * 0.5;
-      const palette = autumnPalette.slice(0, paletteCount).map((c) => mixHex(c, "#2a2a2a", stressMix));
-      if (leafCount > 0 && leafPoints.length) {
-        ctx.save();
-        ctx.strokeStyle = ink;
-        ctx.fillStyle = palette[0];
-        ctx.globalAlpha = 1;
+      if (sproutMode) {
+        const sproutSpec = {
+          ...lsys,
+          iterations: Math.min(lsys.iterations, 2),
+          rules: lsys.rules,
+          stateMachine: null,
+          growthRel,
+          effortAbs,
+          effortGate,
+          branchGate,
+          clusterGate,
+          idleMode,
+          sproutMode,
+          isSprout,
+          sproutN
+        };
+        sproutSpec.step = Math.max(3, sproutSpec.step);
+        drawLSystem(ctx, trunkTop, -Math.PI / 2 + lean, sproutSpec, leafPoints, ink, geom, padT + 8, runScale * fitScale * 0.4, collision, captureOnly);
+      } else if (growthN > 0.05) {
+        const trunkSpec = {
+          ...lsys,
+          stateMachine: {
+            startState: "TRUNK",
+            trunkStepScale: 1.35,
+            trunkBranchProbScale: 0.2,
+            trunkClusterProbScale: 0.15,
+            trunkMaxInternodePx: 15,
+            trunkNodeSpacingPx: 22,
+            trunkNoiseScale: 0.4,
+            trunkTurnScale: 0.35,
+            burstDurationSteps: 0
+          },
+          growthRel,
+          effortAbs,
+          effortGate,
+          branchGate,
+          clusterGate,
+          idleMode,
+          sproutMode,
+          isSprout,
+          sproutN,
+          isMainTrunk: true
+        };
+        drawLSystem(ctx, trunkTop, -Math.PI / 2 + lean, trunkSpec, leafPoints, ink, geom, padT + 8, runScale * fitScale * 0.7, collision, captureOnly);
 
-        const points = (leafPoints.length ? leafPoints : [
-          { x: trunkTop.x, y: trunkTop.y },
-          { x: trunkBaseX, y: baseY - (height * 0.3) },
-          { x: trunkBaseX, y: baseY - (height * 0.6) }
-        ]).slice().sort((a, b) => a.y - b.y);
-        const topCount = Math.max(6, Math.round(points.length * 0.65));
-        const upperPoints = points.slice(0, topCount);
-        const lowerPoints = points.slice(topCount);
-        const dropCount = Math.round(leafCount * 0.2);
-        for (let k=0;k<leafCount;k++){
-          let px = 0;
-          let py = 0;
-          if (k < dropCount) {
-            const pick = points[k % points.length] || trunkTop;
-            const fall = (k / Math.max(1, dropCount)) * (40 + 80 * (1 - cohesionN));
-            px = pick.x + ((k % 7) - 3) * 2;
-            py = pick.y + fall;
-          } else {
-            const pick = (k % 3 === 0) ? points[k % points.length]
-              : (k % 7 === 0 && lowerPoints.length ? lowerPoints[k % lowerPoints.length]
-                : upperPoints[k % upperPoints.length]);
-            const spread = 30 + 60 * (1 - cohesionN);
-            const t = (k * 0.6180339887) % 1;
-            const theta = t * Math.PI * 2;
-            px = pick.x + Math.cos(theta) * spread * (0.35 + 0.65 * t);
-            py = Math.max(padT + 6, pick.y + Math.sin(theta) * spread * (0.35 + 0.65 * t));
+        const burstDuration = Math.round(140 + 180 * recursionN);
+        const burstBudgetBonus = Math.round(250 + 350 * recursionN);
+        const burstDecay = 0.995 - 0.01 * recursionN;
+        const burstMinLen = Math.max(1.2, lsys.step * (0.8 - 0.2 * recursionN));
+        const burstMaxInternodePx = clamp(7 - 4 * recursionN, 3, 7);
+        const burstNodeSpacingPx = clamp(10 - 5 * recursionN, 5, 10);
+        const burstMaxRadiusPx = clamp(110 - 55 * recursionN, 55, 110);
+        anchors.forEach((anchor, i) => {
+          // debug anchor overlay
+          if (drawTree._debugAnchors) {
+            geom.paths.push({
+              type: "circle",
+              cx: anchor.x,
+              cy: anchor.y,
+              r: 3.2,
+              stroke: "#111111",
+              sw: 1.2,
+              alpha: 0.9,
+              fill: "rgba(0,0,0,0.08)",
+              fillAlpha: 1,
+              courseId,
+              conceptId: anchor.conceptId,
+              zoneType: "debug-anchor"
+            });
+            geom.paths.push({
+              type: "circle",
+              cx: anchor.x,
+              cy: anchor.y,
+              r: burstMaxRadiusPx,
+              stroke: "rgba(0,0,0,0.25)",
+              sw: 0.8,
+              alpha: 0.4,
+              fill: "none",
+              fillAlpha: 0,
+              courseId,
+              conceptId: anchor.conceptId,
+              zoneType: "debug-burst-radius"
+            });
+          }
+          // compute tangent + kick-out heading
+          const nodeIdx = Math.max(0, Math.min(trunkNodes.length - 1, anchor.nodeIndex || 0));
+          const prev = trunkNodes[Math.max(0, nodeIdx - 1)] || anchor;
+          const next = trunkNodes[Math.min(trunkNodes.length - 1, nodeIdx + 1)] || anchor;
+          const tan = Math.atan2((next.y - prev.y) || Math.sin(trunkAngle), (next.x - prev.x) || Math.cos(trunkAngle));
+          const kickSign = i % 2 === 0 ? 1 : -1;
+          const kickDeg = 25 + 30 * seededRandom(seedKey, `kick:${i}`);
+          const burstAngle = tan + kickSign * (kickDeg * (Math.PI / 180));
+
+          // short kick phase to push off trunk
+          let kx = anchor.x;
+          let ky = anchor.y;
+          const kickSteps = 4 + Math.floor(seededRandom(seedKey, `kick-steps:${i}`) * 5);
+          const kickStep = Math.max(2, (burstMaxInternodePx || 6) * 0.45);
+          for (let k = 0; k < kickSteps; k++) {
+            const nx = kx + Math.cos(burstAngle) * kickStep;
+            const ny = ky + Math.sin(burstAngle) * kickStep;
+            if (!captureOnly) {
+              ctx.beginPath();
+              ctx.moveTo(kx, ky);
+              ctx.lineTo(nx, ny);
+              ctx.strokeStyle = ink;
+              ctx.lineWidth = 0.7;
+              ctx.stroke();
+            }
+            geom.paths.push({
+              x1: kx, y1: ky, x2: nx, y2: ny,
+              stroke: ink,
+              sw: 0.7,
+              alpha: 1,
+              type: "kick",
+              courseId,
+              conceptId: anchor.conceptId,
+              zoneType: "burst-kick"
+            });
+            kx = nx; ky = ny;
           }
 
-          const rad = 1.1 + 1.4 * ((k % 11) / 10);
-          const stretch = 1.2 + 0.9 * ((k % 7) / 6);
-          const angle = (k % 9) * (Math.PI / 8);
-          ctx.fillStyle = palette[k % palette.length];
-          ctx.save();
-          ctx.translate(px, py);
-          ctx.rotate(angle);
-          ctx.beginPath();
-          ctx.ellipse(0, 0, rad * stretch, rad, 0, 0, Math.PI * 2);
-          ctx.fill();
-          if ((k % 5) === 0) { ctx.globalAlpha = 1; ctx.stroke(); }
-          ctx.restore();
-
-          geom.paths.push({
-            type: "circle",
-            cx: px, cy: py, r: rad,
-            stroke: ink, sw: 0.8,
-            alpha: 0.15,
-            fill: "rgba(58,61,94,0.10)",
-            fillAlpha: 1
-          });
-        }
-        ctx.restore();
+          const burstSpec = {
+            ...lsys,
+            seedKey: `${lsys.seedKey}|burst:${i}`,
+            conceptId: anchor.conceptId,
+            returnEnd: true,
+            growthRel,
+            effortAbs,
+            effortGate,
+            branchGate,
+            clusterGate,
+            idleMode,
+            sproutMode,
+            isSprout,
+            sproutN,
+            stateMachine: {
+              startState: "BURST",
+              burstDurationSteps: burstDuration,
+              burstBudgetBonus,
+              burstDecay,
+              burstMinLen,
+              burstStepScale: 0.55,
+              trunkStepScale: 1.2,
+              burstBranchProbScale: 2 + 2 * recursionN,
+              trunkBranchProbScale: 0.2,
+              burstClusterProbScale: 1.6,
+              trunkClusterProbScale: 0.2,
+              burstMaxInternodePx,
+              burstNodeSpacingPx,
+              burstAxisAngle: burstAngle,
+              burstOrigin: { x: anchor.x, y: anchor.y },
+              burstMaxRadiusPx,
+              burstNoiseScale: 0.5,
+              burstTurnScale: 0.65,
+              burstTwigStepScale: 0.35
+            }
+          };
+          const end = drawLSystem(ctx, { x: kx, y: ky }, burstAngle, burstSpec, leafPoints, ink, geom, padT + 8, runScale * fitScale * 0.85, collision, captureOnly);
+          if (end) {
+            const recoverySteps = 20 + Math.floor(seededRandom(seedKey, `recovery:${i}`) * 20);
+            const recoverySpec = {
+              ...lsys,
+              seedKey: `${lsys.seedKey}|recovery:${i}`,
+              conceptId: anchor.conceptId,
+              growthRel,
+              effortAbs,
+              effortGate,
+              branchGate,
+              clusterGate,
+              idleMode,
+              sproutMode,
+              isSprout,
+              sproutN,
+              stateMachine: {
+                startState: "TRUNK",
+                recoverySteps,
+                trunkStepScale: 1.25,
+                trunkBranchProbScale: 0.05,
+                trunkClusterProbScale: 0.05,
+                trunkMaxInternodePx: 16,
+                trunkNodeSpacingPx: 24,
+                trunkNoiseScale: 0.35,
+                trunkTurnScale: 0.3
+              }
+            };
+            drawLSystem(ctx, { x: end.x, y: end.y }, end.dir, recoverySpec, leafPoints, ink, geom, padT + 8, runScale * fitScale * 0.6, collision, captureOnly);
+          }
+        });
       }
+      // END PATCH
+
+      // Leaves are drawn in a geometry-driven post-pass (renderForest) using geom.leafPoints.
 
       // Course labels (horizontal below sprout)
-      ctx.save();
-      ctx.fillStyle = ink;
-      ctx.globalAlpha = 1;
-      ctx.font = "600 12px " + getCSSVar("--sans");
-      const labelX = clamp(x0, padL + 4, w - padR - 4);
-      const labelY = Math.min(baseY + 16, baseY + 26);
-      ctx.textAlign = "center";
-      ctx.fillText(course, labelX, labelY);
-      ctx.restore();
-    }
+      if (shouldDraw) {
+        ctx.save();
+        ctx.fillStyle = ink;
+        ctx.globalAlpha = 1;
+        ctx.font = "600 12px " + getCSSVar("--sans");
+        const labelX = clamp(x0, padL + 4, w - padR - 4);
+        const labelY = Math.min(baseY + 16, baseY + 26);
+        ctx.textAlign = "center";
+        ctx.fillText(course, labelX, labelY);
+        ctx.restore();
+      }
+    return geom;
+  }
 
   // Debounced forest updates while typing
-  const debouncedForest = debounce(() => {
-    try { renderForest(); } catch {}
-  }, 180);
+  const debouncedForest = (() => {
+    const regen = debounce(() => {
+      try {
+        renderForestFrame({ allowRegen: true });
+      } catch (err) {
+        console.error("renderForest failed", err);
+        try { toast("Forest render failed (see console)"); } catch {}
+      }
+    }, 180);
+    return () => {
+      markForestDirty();
+      regen();
+    };
+  })();
 
   const debouncedGraph = debounce(() => {
     try { renderConceptGraph(); } catch {}
@@ -4003,6 +7638,7 @@
     toggleHiResPngEl.checked = !!state.forest.hiResPng;
     if (toggleFullGhostEl) toggleFullGhostEl.checked = !!state.forest.showFullGhost;
     document.body.classList.toggle("print-preview", !!state.printPreview);
+    updateFocusUi();
     debouncedForest();
   }
 
@@ -4266,7 +7902,8 @@
 
     el("btnResetWeek").addEventListener("click", () => {
       if (!lastForestGeom) renderForest();
-      saveGhostSnapshot(state.forest.weekId || isoWeekId(new Date()));
+      saveWeeklyArchive(state.forest.weekly);
+      saveGhostSnapshot(state.forest.weekId || currentWeekId());
       state.todayTasks = [];
       state.weekendTasks = [];
       state.todayNotes = "";
@@ -4283,9 +7920,10 @@
       state.llmNoteAnalyses = {};
       state.llmConferenceResponse = "";
       state.forest.perCourseMax = {};
-      state.forest.weekId = isoWeekId(new Date());
+      state.forest.weekId = currentWeekId();
       state.forest.weekly = { weekId: state.forest.weekId, courses: {} };
       saveState();
+      invalidateForestCaches();
       renderModeChips();
       renderTasks();
       renderCourseCards();
@@ -4346,6 +7984,67 @@
       setPrintPreview(false);
     });
 
+    focusBackEl?.addEventListener("click", () => {
+      exitFocusMode();
+    });
+
+    forestCanvas?.addEventListener("click", (e) => {
+      const rect = forestCanvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const hit = lastCourseCells.find((cell) =>
+        x >= cell.x && x <= cell.x + cell.w && y >= cell.y && y <= cell.y + cell.h
+      );
+      if (!hit?.course) return;
+      if (focusMode === "grid") {
+        setFocusCourse(hit.course, "hybrid");
+      } else if (focusMode === "hybrid") {
+        if (hit.course === focusedCourse) {
+          setFocusMode("focus");
+        } else {
+          setFocusCourse(hit.course, "hybrid");
+        }
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+      const isTyping = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+      if (e.key === "Escape") {
+        exitFocusMode();
+        return;
+      }
+      if (isTyping) return;
+      if (String(e.key || "").toLowerCase() === "f") {
+        if (focusMode === "focus") {
+          setFocusMode("hybrid");
+        } else if (focusMode === "hybrid") {
+          setFocusMode("focus");
+        }
+        return;
+      }
+      if (String(e.key || "").toLowerCase() === "d") {
+        scaleDebugOn = !scaleDebugOn;
+        renderScaleDebug();
+        return;
+      }
+      if (String(e.key || "").toLowerCase() === "b") {
+        DEBUG_FOREST.showBBoxes = !DEBUG_FOREST.showBBoxes;
+        debouncedForest();
+        return;
+      }
+      if (String(e.key || "").toLowerCase() === "l") {
+        leavesEnabled = !leavesEnabled;
+        debouncedForest();
+        return;
+      }
+      const key = String(e.key || "").trim();
+      if (!/^[1-9]$/.test(key)) return;
+      const idx = Number(key) - 1;
+      const course = state.courses?.[idx];
+      if (course) setFocusCourse(course);
+    });
+
     // Forest controls
     el("btnToggleLegend").addEventListener("click", () => {
       state.forest.legendOn = !state.forest.legendOn;
@@ -4396,11 +8095,12 @@
     btnSimForest?.addEventListener("click", () => {
       state.forest.simulateMax = !state.forest.simulateMax;
       saveState();
+      invalidateForestCaches();
       debouncedForest();
       toast(state.forest.simulateMax ? "Simulation on" : "Simulation off");
     });
     el("btnClearGhost").addEventListener("click", () => {
-      const current = isoWeekId(new Date());
+      const current = currentWeekId();
       const prev = prevIsoWeekId(current);
       clearGhostSnapshot(prev);
       debouncedForest();
@@ -4447,8 +8147,10 @@
 
   // ---------- Init ----------
   // Ensure weekId is set early to support ghost logic without flicker
-  if (!state.forest.weekId) state.forest.weekId = isoWeekId(new Date());
-  hydrateInputs();
+  const bootWeekId = currentWeekId();
+  if (state.forest.weekId !== bootWeekId) state.forest.weekId = bootWeekId;
+  getWeeklyStore(bootWeekId);
+    hydrateInputs();
   fetchMaineEnvironment();
 
     // If first load has no md cache, show empty but ready
