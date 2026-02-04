@@ -1286,6 +1286,8 @@
   function invalidateForestCaches() {
     geomCache.clear();
     prevGeomByKey.clear();
+    if (typeof geomCacheV01 !== "undefined") geomCacheV01.clear();
+    if (state?.forest?.v01) state.forest.v01.lastMetrics = null;
   }
 
   const MetricsReporter = (() => {
@@ -3870,6 +3872,7 @@
   const MAX_STEPS = 3200;
   const TOP_PAD = 16;
   const BOTTOM_PAD = 10;
+  const V01_UNGUARDED = true;
 
   if (typeof window !== "undefined") {
     window.V01_DEBUG_DISABLE_OCC = window.V01_DEBUG_DISABLE_OCC || false;
@@ -4075,10 +4078,11 @@
   function generateSegmentsTreeV01(seedKey, params) {
     const growthRel = clamp(params.growthRel ?? 0, 0, 1);
     const isSimMax = !!(params?.simulateMax || params?.__simulateMax);
-    const disableOcc = getV01DebugFlag("V01_DEBUG_DISABLE_OCC");
+    const unguarded = !!V01_UNGUARDED;
+    const disableOcc = getV01DebugFlag("V01_DEBUG_DISABLE_OCC") || unguarded;
     const disableTier = getV01DebugFlag("V01_DEBUG_DISABLE_TIER");
-    const disableCone = getV01DebugFlag("V01_DEBUG_DISABLE_CONE");
-    const disableCooldown = getV01DebugFlag("V01_DEBUG_DISABLE_COOLDOWN");
+    const disableCone = getV01DebugFlag("V01_DEBUG_DISABLE_CONE") || unguarded;
+    const disableCooldown = getV01DebugFlag("V01_DEBUG_DISABLE_COOLDOWN") || unguarded;
     const spawnDebug = getV01DebugFlag("V01_DEBUG_SPAWN_HISTO");
     let maxSteps = Math.max(1, Math.round(params.maxSteps || MIN_STEPS));
     const baseLen = lerp(12, 16, growthRel);
@@ -4086,7 +4090,7 @@
     const tropism = lerp(0.08, 0.18, growthRel);
     const jitterDeg = lerp(2, 8, growthRel);
     const trunkSteps = Math.round(lerp(12, 24, clamp(maxSteps / MAX_STEPS, 0, 1)));
-    const minBranchStep = Math.max(4, Math.floor(trunkSteps * 0.35));
+    const minBranchStep = unguarded ? 1 : Math.max(2, Math.floor(trunkSteps * 0.2));
     const coneRad = 25 * (Math.PI / 180);
     let branchProb = lerp(0.08, 0.22, growthRel);
     const maxDepth = Math.round(lerp(2, 4, growthRel));
@@ -4095,8 +4099,9 @@
     const driftPeriod = lerp(180, 320, growthRel);
     const driftAmp = lerp(0.008, 0.02, growthRel);
     const conePrimary = 50 * (Math.PI / 180);
-    const coneTwig = 70 * (Math.PI / 180);
+    const coneTwig = 85 * (Math.PI / 180);
     const finalCone = 80 * (Math.PI / 180);
+    const finalConeBranch = 95 * (Math.PI / 180);
     const wind = {
       baseTurnRate: 0.04,
       noiseAmp: 0.22,
@@ -4114,10 +4119,10 @@
     const baseY = canvasH * 0.65;
     const canopyTop = canvasH * 0.18;
     const occ = makeOccGrid(canvasW, canvasH, wind.occCellSize);
-    const trunkTierEvery = Math.round(10 + (14 - 10) * seededRandom(seedKey || "", "v01-trunk-tier"));
-    const tierEventsMax = isSimMax ? 3 : (growthRel >= 0.75 ? 2 : 1);
-    const noSignal = !!params.noSignal;
-    if (noSignal && !isSimMax) {
+    const trunkTierEvery = unguarded ? 1 : Math.round(10 + (14 - 10) * seededRandom(seedKey || "", "v01-trunk-tier"));
+    const tierEventsMax = unguarded ? 9999 : (isSimMax ? 0 : (growthRel >= 0.75 ? 2 : 1));
+    const noSignal = unguarded ? false : (!!params.noSignal && !isSimMax);
+    if (noSignal) {
       maxSteps = Math.min(maxSteps, 4);
       branchProb = 0.0;
       baseBranchSteps = 0;
@@ -4156,8 +4161,8 @@
       const db = Number(dbStr);
       const yb = Number(ybStr);
       const dN = maxDepth > 0 ? clamp(depthVal / maxDepth, 0, 1) : 0;
-      const overrideBase = isSimMax ? 0.18 : 0.12;
-      const overrideMax = isSimMax ? 0.45 : 0.32;
+      const overrideBase = isSimMax ? 0.55 : 0.45;
+      const overrideMax = isSimMax ? 0.90 : 0.75;
       const overrideProb = lerp(overrideBase, overrideMax, Math.pow(dN, 0.7));
       if (disableCooldown) {
         markSpawn(db, yb);
@@ -4254,9 +4259,10 @@
       const steerGain = lerp(1.0, 0.35, Math.pow(depthN, 0.8));
       const maxSteer = (depth === 0 ? (6 * (Math.PI / 180)) : (10 * (Math.PI / 180)));
       let boundary = 0;
-      if (mN > 0.35) {
+      if (!unguarded && mN > 0.35) {
         boundary = boundaryTurn(dirAngle, xC, yC, canvasW, canvasH, wind.boundaryBand, wind.boundaryGain);
-        boundary = clamp(boundary, -maxSteer, maxSteer) * steerGain * 0.65;
+        const branchBoundaryScale = (depth === 0) ? 1 : 0.25;
+        boundary = clamp(boundary, -maxSteer, maxSteer) * steerGain * 0.65 * branchBoundaryScale;
       }
       const boundaryAppliedThisStep = Math.abs(boundary) > 1e-4;
       if (boundaryAppliedThisStep) {
@@ -4269,9 +4275,10 @@
         const left = occSample(occ, xC + Math.cos(dirAngle - Math.PI / 4) * stepLen * 1.2, yC + Math.sin(dirAngle - Math.PI / 4) * stepLen * 1.2);
         const right = occSample(occ, xC + Math.cos(dirAngle + Math.PI / 4) * stepLen * 1.2, yC + Math.sin(dirAngle + Math.PI / 4) * stepLen * 1.2);
         const occLevel = Math.max(forward, left, right);
-        if (occLevel > 0.25) {
+        if (!unguarded && occLevel > 0.25) {
+          const branchOccScale = (depth === 0) ? 1 : 0.25;
           densityBias = (right - left) * -wind.occGain * (1 + forward * 0.2);
-          densityBias = clamp(densityBias, -maxSteer, maxSteer) * steerGain;
+          densityBias = clamp(densityBias, -maxSteer, maxSteer) * steerGain * branchOccScale;
         }
       }
       const occAppliedThisStep = Math.abs(densityBias) > 1e-4;
@@ -4281,7 +4288,8 @@
       }
       let desiredAngle = dirAngle + baseTurn + noiseTurn + boundary + densityBias;
       if (!disableCone) {
-        desiredAngle = clampAngleToCone(desiredAngle, finalCone);
+        const coneUse = (depth === 0) ? finalCone : finalConeBranch;
+        desiredAngle = clampAngleToCone(desiredAngle, coneUse);
       }
       const desiredDir = { x: Math.cos(desiredAngle), y: Math.sin(desiredAngle) };
       dir = lerpVec(dir, desiredDir, wind.headingInertiaK);
@@ -4292,8 +4300,9 @@
         dir = clampDirToCone(dir, coneRad);
         dirAngle = Math.atan2(dir.y, dir.x);
       }
-      if (Math.abs(dir.y) < 0.15) {
-        dir = lerpVec(dir, up, 0.65);
+      if (!unguarded && Math.abs(dir.y) < 0.15) {
+        const horizBias = (depth === 0) ? 0.65 : 0.35;
+        dir = lerpVec(dir, up, horizBias);
         dirAngle = Math.atan2(dir.y, dir.x);
       }
 
@@ -4301,7 +4310,7 @@
       let ny = state.y + dir.y * stepLen;
       const nxC = nx + baseX;
       const nyC = ny + baseY;
-      if (nxC < 8 || nxC > canvasW - 8 || nyC < 8 || nyC > canvasH - 8) {
+      if (!unguarded && (nxC < 8 || nxC > canvasW - 8 || nyC < 8 || nyC > canvasH - 8)) {
         const toward = Math.atan2(baseY - yC, baseX - xC);
         const adjust = angleDelta(dirAngle, toward) * 0.65;
         dir = rotateVec(dir, adjust);
@@ -4328,9 +4337,26 @@
       if (depth === 0) trunkStepIndex += 1;
 
       let branchedNow = false;
-      const tierEligible = !noSignal && depth === 0 && yC > (canopyTop + 0.08 * canvasH)
-        && trunkTierEvery > 0 && trunkStepIndex > 0 && (trunkStepIndex % trunkTierEvery === 0) && maxDepth > 0;
+      const tierEligible = !noSignal && depth === 0 && (unguarded || yC > (canopyTop + 0.08 * canvasH))
+        && trunkTierEvery > 0 && trunkStepIndex > 0 && maxDepth > 0;
       if (tierEligible) {
+        if (!unguarded) {
+          const tierRoll = stepRand(`${seedKey}|tier`, trunkStepIndex, "tier-prob");
+          if ((trunkStepIndex % trunkTierEvery) !== 0 && tierRoll >= 0.35) {
+            // skip most non-boundary steps to avoid forming a band
+          } else if (disableTier) {
+            recordSpawn(yC, depth, false, { tierDisabled: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+          } else if (tierEventsFired >= tierEventsMax) {
+            recordSpawn(yC, depth, false, { tierCap: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+          } else if (budgetLeft <= 6) {
+            recordSpawn(yC, depth, false, { budget: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+          } else if (!canSpawnHere(depth, yC, state.branchId, stepIndex)) {
+            tierSpawnsBlocked += 1;
+            recordSpawn(yC, depth, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+          } else {
+            // fall through to spawn
+          }
+        }
         if (disableTier) {
           recordSpawn(yC, depth, false, { tierDisabled: true, occ: occAppliedThisStep, coneClamp: !disableCone });
         } else if (tierEventsFired >= tierEventsMax) {
@@ -4371,13 +4397,16 @@
 
       if (!branchedNow && !noSignal && stepIndex >= minBranchStep && depth < maxDepth && budgetLeft > 0) {
         const trunkProgress = clamp(trunkStepIndex / Math.max(1, trunkSteps), 0, 1);
-        const trunkRamp = smoothstep(0.7, 1.0, trunkProgress);
-        const apicalScale = 0.15 + 0.85 * trunkRamp;
+        const trunkRamp = smoothstep(0.0, 0.7, trunkProgress);
+        const apicalScale = unguarded ? 1 : (0.9 + 0.1 * trunkRamp);
         const depthN2 = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
         const tierMul = depthN2 < 0.33 ? 0.7 : (depthN2 < 0.66 ? 1.0 : 0.55);
-        const branchProbEff = branchProb * tierMul * apicalScale;
+        const heightN = clamp((baseY - yC) / Math.max(1, baseY - canopyTop), 0, 1);
+        const topPenalty = smoothstep(0.55, 1.0, heightN);
+        const heightMul = lerp(2.4, 0.2, heightN);
+        const branchProbEff = branchProb * tierMul * apicalScale * (unguarded ? 1 : (heightMul * (1 - 0.65 * topPenalty)));
         const trunkGate = clamp(trunkStepIndex / Math.max(1, trunkSteps), 0, 1);
-        const allowProb = smoothstep(0.05, 1.0, trunkGate);
+        const allowProb = unguarded ? 1 : (0.6 + 0.4 * trunkGate);
         const r = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branch");
         const forceBranch = (!noSignal && growthRel > 0.2 && branchEvents < 2 && (stepIndex === minBranchStep + 8 || stepIndex === minBranchStep + 22));
         if ((r < branchProbEff * allowProb) || forceBranch) {
@@ -4476,7 +4505,7 @@
     if (missingDepth && DEBUG_FOREST?.enabled) {
       console.warn("[V01Depth] missing depth on segments", { seedKey, count: rawSegments.length });
     }
-    const sanitized = sanitizeSegments(rawSegments, observedMaxDepth, { minLenBase: 0.6, minLenEnd: 1.8, densityCap: !!simulateMax });
+    const sanitized = sanitizeSegments(rawSegments, observedMaxDepth, { minLenBase: 0.6, minLenEnd: 1.8, densityCap: false });
     const clean = sanitized.segments;
     const segmentsAfterSanitize = clean.length;
     let minSegLenKept = Infinity;
@@ -4601,6 +4630,10 @@
     s.recursion = 1; s.abstraction = 1; s.cohesion = 1; s.argument = 1; s.diversity = 1;
     s.wordsN = 1; s.tasksN = 1; s.recursionN = 1; s.abstractionN = 1; s.cohesionN = 1; s.argumentN = 1; s.diversityN = 1;
     s.weeklyScoreN = 1; s.weekendScoreN = 1;
+    s.writingDays = 6;
+    s.stress = 0;
+    s.modeDaily = 1;
+    s.modeWeekly = 1;
     s.__simulateMax = true;
     return s;
   }
@@ -4612,11 +4645,12 @@
 
   function renderForestV01(opts = {}) {
     if (!forestCanvas) return;
+    const simulateMax = !!state.forest.simulateMax;
     if (typeof window !== "undefined") {
       window.forestStats = window.forestStats || { blueprintBuilds: 0, drawCalls: 0, keystrokeRedraws: 0, regenCommits: 0, drawTreeCalls: 0, revealCalls: 0 };
       window.forestStats.drawCalls += 1;
     }
-    const allowRegen = opts.allowRegen !== false || !lastForestGeom;
+    const allowRegen = simulateMax || opts.allowRegen !== false || !lastForestGeom;
     const { ctx, w, h } = initCanvasHiDPI(forestCanvas, null, null, { willReadFrequently: true });
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = getCSSVar("--panel");
@@ -4640,7 +4674,6 @@
       geomCacheV01.clear();
       saveStateSoon();
     }
-    const simulateMax = !!state.forest.simulateMax;
     const courses = state.courses || [];
     if (!courses.length) {
       ctx.fillStyle = "#8b8c9b";
@@ -4725,7 +4758,7 @@
       const growthRel = simulateMax ? 1 : clamp(getGrowthN(effectiveSignals).value ?? 0, 0, 1);
       const targetFrac = lerp(0.18, 0.78, smoothstep(0, 1, growthRel));
       const maxSteps = simulateMax ? MAX_STEPS : Math.round(MIN_STEPS + (MAX_STEPS - MIN_STEPS) * growthRel);
-      const noSignal = ((metrics.words | 0) === 0) && ((metrics.tasks | 0) === 0);
+      const noSignal = simulateMax ? false : (((metrics.words | 0) === 0) && ((metrics.tasks | 0) === 0));
       const seedKey = `${ck}|${weekStartKey}|${dayKey}|v01|${seedSalt}`;
       const signalsHash = forestSignalsHash({ ...effectiveSignals, weekendRel, growthRel, effortAbs: computeEffortAbs(effectiveSignals.tasks || 0, effectiveSignals.writingDays || 0, effectiveSignals.words || 0) });
 
@@ -4743,6 +4776,12 @@
           saveStateSoon();
         }
         if (snapshot?.params) params = snapshot.params;
+      }
+
+      if (simulateMax) {
+        params.growthRel = 1;
+        params.weekendRel = 1;
+        params.maxSteps = MAX_STEPS;
       }
 
       const cacheSignalsHash = (!simulateMax && snapshot?.signalsHash) ? snapshot.signalsHash : signalsHash;
@@ -4763,7 +4802,7 @@
 
       const geomMeta = geom.meta || {};
       const maxDepthForRender = geomMeta.observedMaxDepth ?? geomMeta.depthMaxReached ?? geomMeta.maxDepth ?? 0;
-      const sanitized = sanitizeSegments(geom.segments || [], maxDepthForRender, { minLenBase: 0.6, minLenEnd: 1.8, densityCap: !!simulateMax });
+      const sanitized = sanitizeSegments(geom.segments || [], maxDepthForRender, { minLenBase: 0.6, minLenEnd: 1.8, densityCap: false });
       let segments = sanitized.segments;
       if (!segments.length) {
         segments = makeFallbackSegments(seedKey);
@@ -4793,9 +4832,9 @@
       lastScaleStats[ck] = {
         courseKey: ck,
         geomSource,
-        growthRel,
+        growthRel: simulateMax ? 1 : growthRel,
         targetFrac,
-        maxStepsUsed: params.maxSteps,
+        maxStepsUsed: simulateMax ? MAX_STEPS : params.maxSteps,
         bounds,
         scale: s,
         targetH,
