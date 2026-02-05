@@ -4028,6 +4028,14 @@
     return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
   }
 
+  function courseSignature(seedKey) {
+    const lean = lerp(-0.35, 0.35, seededRandom(seedKey || "", "sig-lean"));
+    const crownWidth = lerp(0.6, 1.6, seededRandom(seedKey || "", "sig-crown"));
+    const tierSpacing = lerp(0.6, 1.6, seededRandom(seedKey || "", "sig-tier"));
+    const taper = lerp(0.85, 1.15, seededRandom(seedKey || "", "sig-taper"));
+    return { lean, crownWidth, tierSpacing, taper };
+  }
+
   function clampAngleToCone(a, cone) {
     const up = -Math.PI / 2;
     const minA = up - cone;
@@ -4181,16 +4189,30 @@
     const disableCooldown = getV01DebugFlag("V01_DEBUG_DISABLE_COOLDOWN") || unguarded;
     const spawnDebug = getV01DebugFlag("V01_DEBUG_SPAWN_HISTO");
     let maxSteps = Math.max(1, Math.round(params.maxSteps || MIN_STEPS));
-    const baseLen = lerp(12, 16, growthRel);
-    const decay = lerp(0.97, 0.92, growthRel);
-    const tropism = lerp(0.08, 0.18, growthRel);
+    const sig = courseSignature(seedKey || "");
+    const grammarType = Math.floor(seededRandom(seedKey || "", "v01-grammar") * 4) % 4;
+    const grammarProfiles = [
+      { angleBias: 0.9, curvScale: 0.6, clusterSpread: 0.8 },
+      { angleBias: 1.05, curvScale: 0.9, clusterSpread: 1.0 },
+      { angleBias: 1.2, curvScale: 1.2, clusterSpread: 1.15 },
+      { angleBias: 0.8, curvScale: 1.0, clusterSpread: 1.3 }
+    ];
+    const grammar = grammarProfiles[grammarType] || grammarProfiles[0];
+    const sigCrownN = clamp((sig.crownWidth - 0.6) / 1.0, 0, 1);
+    const sigTierN = clamp((sig.tierSpacing - 0.6) / 1.0, 0, 1);
+    const sigTaperN = clamp((sig.taper - 0.85) / 0.3, 0, 1);
+    const lenScale = MIN_STEPS / Math.max(MIN_STEPS, maxSteps);
+    const baseLen = lerp(12, 16, growthRel) * lenScale;
+    let decay = lerp(0.97, 0.92, growthRel);
+    decay = clamp(decay * sig.taper, 0.88, 0.98);
+    const tropism = lerp(0.08, 0.18, growthRel) * lerp(0.85, 1.15, sigTaperN);
     const jitterDeg = lerp(2, 8, growthRel);
     const trunkSteps = Math.round(lerp(12, 24, clamp(maxSteps / MAX_STEPS, 0, 1)));
     const minBranchStep = unguarded ? 1 : Math.max(2, Math.floor(trunkSteps * 0.2));
     const coneRad = 25 * (Math.PI / 180);
-    let branchProb = lerp(0.08, 0.22, growthRel);
-    const maxDepth = Math.round(lerp(2, 4, growthRel));
-    let baseBranchSteps = Math.round(lerp(10, 26, growthRel));
+    let branchProb = lerp(0.08, 0.22, growthRel) * lerp(0.75, 1.35, sigCrownN);
+    let maxDepth = 2;
+    let baseBranchSteps = Math.round(lerp(10, 26, growthRel) * lerp(0.8, 1.35, sigTierN));
     const driftPhase = ((hashString(`${seedKey}|drift`) % 1000) / 1000) * Math.PI * 2;
     const driftPeriod = lerp(180, 320, growthRel);
     const driftAmp = lerp(0.008, 0.02, growthRel);
@@ -4215,7 +4237,8 @@
     const baseY = canvasH * 0.65;
     const canopyTop = canvasH * 0.18;
     const occ = makeOccGrid(canvasW, canvasH, wind.occCellSize);
-    const trunkTierEvery = unguarded ? 1 : Math.round(10 + (14 - 10) * seededRandom(seedKey || "", "v01-trunk-tier"));
+    const trunkTierEveryBase = Math.round(10 + (14 - 10) * seededRandom(seedKey || "", "v01-trunk-tier"));
+    const trunkTierEvery = unguarded ? 1 : Math.max(2, Math.round(trunkTierEveryBase * sig.tierSpacing));
     const tierEventsMax = unguarded ? 9999 : (isSimMax ? 0 : (growthRel >= 0.75 ? 2 : 1));
     const noSignal = unguarded ? false : (!!params.noSignal && !isSimMax);
     if (noSignal) {
@@ -4235,6 +4258,74 @@
     const spawnSeen = new Set();
     let spawnSeenCount = 0;
     let tierSpawnsBlocked = 0;
+    const tasksN = clamp(params.tasksN ?? 0, 0, 1);
+    const conceptsN = clamp(params.conceptsN ?? 0, 0, 1);
+    const linkageN = clamp(params.linkageN ?? 0, 0, 1);
+    const diversityN = clamp(params.diversityN ?? 0, 0, 1);
+    const allowMicro = isSimMax || (growthRel > 0.45 && conceptsN > 0.25);
+    maxDepth = allowMicro ? (isSimMax ? 4 : 3) : 2;
+    let scaffoldBudget = Math.round(clamp(1 + 4 * (0.55 * growthRel + 0.25 * tasksN + 0.20 * linkageN), 1, 20));
+    scaffoldBudget = Math.round(scaffoldBudget * lerp(0.85, 1.15, sigTierN));
+    scaffoldBudget = clamp(scaffoldBudget, 1, 20);
+    let twigBudget = Math.round(clamp(12 + 60 * (0.55 * conceptsN + 0.45 * diversityN), 60, 280));
+    twigBudget = Math.round(twigBudget * lerp(0.80, 1.25, sigCrownN));
+    twigBudget = clamp(twigBudget, 60, 280);
+    if (noSignal) {
+      scaffoldBudget = 0;
+      twigBudget = 0;
+    }
+    if (!noSignal) {
+      const minScaffold = isSimMax ? 14 : 8;
+      const minTwig = isSimMax ? 260 : 160;
+      scaffoldBudget = Math.max(scaffoldBudget, minScaffold);
+      twigBudget = Math.max(twigBudget, minTwig);
+    }
+    let microTwigBudget = 0;
+    if (allowMicro) {
+      const t = isSimMax ? 1 : clamp((growthRel - 0.45) / 0.55, 0, 1);
+      microTwigBudget = Math.round(lerp(10, 44, t));
+    }
+    let trunkStepsTotal = Math.round(maxSteps * (isSimMax ? 0.08 : 0.14));
+    let scaffoldStepsTotal = Math.round(maxSteps * (isSimMax ? 0.46 : 0.44));
+    let twigStepsTotal = Math.max(0, maxSteps - trunkStepsTotal - scaffoldStepsTotal);
+    if (noSignal) {
+      trunkStepsTotal = Math.min(maxSteps, trunkStepsTotal);
+      scaffoldStepsTotal = 0;
+      twigStepsTotal = 0;
+    }
+    if (scaffoldBudget === 0) {
+      trunkStepsTotal += scaffoldStepsTotal;
+      scaffoldStepsTotal = 0;
+    }
+    if (twigBudget === 0) {
+      trunkStepsTotal += twigStepsTotal;
+      twigStepsTotal = 0;
+    }
+    let trunkStepsLeft = trunkStepsTotal;
+    let scaffoldStepsLeft = scaffoldStepsTotal;
+    let twigStepsLeft = twigStepsTotal;
+    let trunkStepsUsed = 0;
+    let scaffoldStepsUsed = 0;
+    let twigStepsUsed = 0;
+    let microTwigBudgetLeft = microTwigBudget;
+    const classDepthFor = (name) => {
+      if (name === "trunk") return 0;
+      if (name === "scaffold") return 1;
+      if (name === "twig") return 2;
+      if (name === "microTwig") return 3;
+      return 0;
+    };
+    const scaffoldSchedule = new Set();
+    if (scaffoldBudget > 0) {
+      const scheduleSpan = Math.max(8, trunkStepsTotal);
+      const baseSpacing = Math.max(4, Math.floor(scheduleSpan / (scaffoldBudget + 1)));
+      for (let i = 0; i < scaffoldBudget; i++) {
+        const jitter = Math.round((seededRandom(seedKey || "", `scaf-jit:${i}`) * 2 - 1) * Math.max(1, baseSpacing * 0.35));
+        const idx = clamp(Math.round((i + 1) * baseSpacing + jitter), minBranchStep, Math.max(minBranchStep, scheduleSpan - 2));
+        scaffoldSchedule.add(idx);
+      }
+    }
+    const twigPerScaffold = Math.max(5, Math.round(twigBudget / Math.max(1, scaffoldBudget || 1)));
     const spawnKey = (depthVal, yVal) => {
       const dN = maxDepth > 0 ? clamp(depthVal / maxDepth, 0, 1) : 0;
       const yN = clamp(yVal / Math.max(1, canvasH), 0, 1);
@@ -4305,6 +4396,13 @@
     let boundaryAppliedCount = 0;
     let occAppliedCount = 0;
     let tierEventsFired = 0;
+    let scaffoldEventsFired = 0;
+    let twigEventsFired = 0;
+    let scaffoldLenSum = 0;
+    let scaffoldLenCount = 0;
+    let twigLenSum = 0;
+    let twigLenCount = 0;
+    const classCounts = { trunk: 0, scaffold: 0, twig: 0 };
 
     const segGenCountByDepth = Array(depthBins).fill(0);
     const segGenLenSumByDepth = Array(depthBins).fill(0);
@@ -4312,13 +4410,14 @@
     const segGenCosSumByDepth = Array(depthBins).fill(0);
 
     const up = { x: 0, y: -1 };
+    const baseDir = rotateVec(up, sig.lean);
     const jitterRad = (jitterDeg * Math.PI) / 180;
     let branchSerial = 0;
     let trunkStepIndex = 0;
     let budgetLeft = maxSteps;
     let stepIndex = 0;
 
-    let state = { x: 0, y: 0, dir: { x: 0, y: -1 }, depth: 0, stepsLeft: maxSteps, angVel: 0, branchId: 0, parentId: null };
+    let state = { x: 0, y: 0, dir: { x: baseDir.x, y: baseDir.y }, depth: 0, stepsLeft: trunkStepsTotal, angVel: 0, branchId: 0, parentId: null, className: "trunk", localStep: 0, curvBias: 0, curvVel: 0 };
     const stack = [];
 
     while (budgetLeft > 0 && state) {
@@ -4327,8 +4426,29 @@
         state = stack.pop();
         continue;
       }
-      const depth = Math.max(0, Number.isFinite(state.depth) ? Math.floor(state.depth) : 0);
-      state.depth = depth;
+      const cls = state.className || "trunk";
+      const classDepth = classDepthFor(cls);
+      const depth = classDepth;
+      state.depth = classDepth;
+      if (cls === "trunk") {
+        if (trunkStepsLeft <= 0) {
+          state.stepsLeft = 0;
+          continue;
+        }
+        if (state.stepsLeft > trunkStepsLeft) state.stepsLeft = trunkStepsLeft;
+      } else if (cls === "scaffold") {
+        if (scaffoldStepsLeft <= 0) {
+          state.stepsLeft = 0;
+          continue;
+        }
+        if (state.stepsLeft > scaffoldStepsLeft) state.stepsLeft = scaffoldStepsLeft;
+      } else {
+        if (twigStepsLeft <= 0) {
+          state.stepsLeft = 0;
+          continue;
+        }
+        if (state.stepsLeft > twigStepsLeft) state.stepsLeft = twigStepsLeft;
+      }
       let dir = state.dir;
       dir = lerpVec(dir, up, tropism);
       const noise = (stepRand(`${seedKey}|${state.branchId}`, stepIndex + depth * 1000, "noise") * 2 - 1) * jitterRad;
@@ -4337,7 +4457,9 @@
       const drift = Math.sin((stepIndex / driftPeriod) * Math.PI * 2 + driftPhase) * driftAmp;
       dir = rotateVec(dir, drift);
       let stepLen = baseLen * Math.pow(decay, depth);
-      const dN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+      if (state.className === "scaffold") stepLen *= 1.2;
+      if (state.className === "twig") stepLen *= 1.1;
+      const dN = maxDepth > 0 ? clamp(classDepth / maxDepth, 0, 1) : 0;
       const stepBoost = isSimMax ? lerp(1.0, 1.8, Math.pow(dN, 1.1)) : lerp(1.0, 1.3, Math.pow(dN, 1.1));
       stepLen *= stepBoost;
       const minStep = isSimMax ? lerp(0.8, 2.0, dN) : lerp(0.6, 1.4, dN);
@@ -4351,7 +4473,7 @@
       const minDist = topEdge;
       const band = Math.max(1, wind.boundaryBand || 1);
       const mN = clamp((band - minDist) / band, 0, 1);
-      const depthN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+      const depthN = maxDepth > 0 ? clamp(classDepth / maxDepth, 0, 1) : 0;
       const steerGain = lerp(1.0, 0.35, Math.pow(depthN, 0.8));
       const maxSteer = (depth === 0 ? (6 * (Math.PI / 180)) : (10 * (Math.PI / 180)));
     let boundary = 0;
@@ -4381,6 +4503,11 @@
       if (occAppliedThisStep) {
         occHits += 1;
         occAppliedCount += 1;
+      }
+      if (cls === "scaffold") {
+        const cb = state.curvBias || 0;
+        state.curvVel = 0.9 * (state.curvVel || 0) + 0.1 * cb;
+        dirAngle += state.curvVel;
       }
       let desiredAngle = dirAngle + baseTurn + noiseTurn + boundary + densityBias;
       if (!disableCone) {
@@ -4418,7 +4545,16 @@
       }
 
       const len = Math.hypot(nx - state.x, ny - state.y);
-      segments.push({ x1: state.x, y1: state.y, x2: nx, y2: ny, depth, branchId: state.branchId, parentId: state.parentId, len });
+      const clsUse = cls || (classDepth === 0 ? "trunk" : "scaffold");
+      classCounts[clsUse] = (classCounts[clsUse] || 0) + 1;
+      if (clsUse === "trunk") { trunkStepsLeft -= 1; trunkStepsUsed += 1; }
+      else if (clsUse === "scaffold") { scaffoldStepsLeft -= 1; scaffoldStepsUsed += 1; }
+      else { twigStepsLeft -= 1; twigStepsUsed += 1; }
+      if (clsUse === "scaffold") { scaffoldLenSum += len; scaffoldLenCount += 1; }
+      if (clsUse === "twig" || clsUse === "microTwig") { twigLenSum += len; twigLenCount += 1; }
+      const taperBoost = (clsUse === "scaffold") ? 0.3 : (clsUse === "twig") ? 0.9 : (clsUse === "microTwig") ? 1.4 : 0;
+      const depthRender = Math.min(maxDepth, classDepth + taperBoost);
+      segments.push({ x1: state.x, y1: state.y, x2: nx, y2: ny, depth: depthRender, branchId: state.branchId, parentId: state.parentId, len, className: clsUse });
       const dbi = Math.min(depthBins - 1, Math.floor(dN * depthBins));
       segGenCountByDepth[dbi] += 1;
       segGenLenSumByDepth[dbi] += len;
@@ -4430,106 +4566,173 @@
       state.stepsLeft -= 1;
       budgetLeft -= 1;
       occStamp(occ, nx + baseX, ny + baseY, wind.occDecay);
-      if (depth === 0) trunkStepIndex += 1;
+      if (classDepth === 0) trunkStepIndex += 1;
+      state.localStep = (state.localStep || 0) + 1;
 
       let branchedNow = false;
-      const tierEligible = !noSignal && depth === 0 && (unguarded || yC > (canopyTop + 0.08 * canvasH))
-        && trunkTierEvery > 0 && trunkStepIndex > 0 && maxDepth > 0;
-      if (tierEligible) {
-        if (!unguarded) {
-          const tierRoll = stepRand(`${seedKey}|tier`, trunkStepIndex, "tier-prob");
-          if ((trunkStepIndex % trunkTierEvery) !== 0 && tierRoll >= 0.35) {
-            // skip most non-boundary steps to avoid forming a band
-          } else if (disableTier) {
-            recordSpawn(yC, depth, false, { tierDisabled: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-          } else if (tierEventsFired >= tierEventsMax) {
-            recordSpawn(yC, depth, false, { tierCap: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-          } else if (budgetLeft <= 6) {
-            recordSpawn(yC, depth, false, { budget: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-          } else if (!canSpawnHere(depth, yC, state.branchId, stepIndex)) {
-            tierSpawnsBlocked += 1;
-            recordSpawn(yC, depth, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-          } else {
-            // fall through to spawn
-          }
-        }
+      if (!branchedNow && !noSignal && classDepth === 0 && scaffoldSchedule.has(trunkStepIndex) && scaffoldEventsFired < scaffoldBudget && budgetLeft > 6 && scaffoldStepsLeft > 0) {
         if (disableTier) {
           recordSpawn(yC, depth, false, { tierDisabled: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-        } else if (tierEventsFired >= tierEventsMax) {
-          recordSpawn(yC, depth, false, { tierCap: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-        } else if (budgetLeft <= 6) {
-          recordSpawn(yC, depth, false, { budget: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-        } else if (!canSpawnHere(depth, yC, state.branchId, stepIndex)) {
+        } else if (!canSpawnHere(classDepthFor("scaffold"), yC, state.branchId, stepIndex)) {
           tierSpawnsBlocked += 1;
-          recordSpawn(yC, depth, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+          recordSpawn(yC, depth + 1, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
         } else {
-          const tierTheta = (18 + 12 * seededRandom(seedKey || "", `v01-tier-theta:${trunkStepIndex}`)) * (Math.PI / 180);
-          const tierLenScale = 0.35 + 0.2 * seededRandom(seedKey || "", `v01-tier-len:${trunkStepIndex}`);
-          const tierSteps = 2 + Math.floor(seededRandom(seedKey || "", `v01-tier-steps:${trunkStepIndex}`) * 2);
-          const bSteps = clamp(Math.round(tierSteps * tierLenScale), 2, Math.floor(0.15 * maxSteps));
-          const trunkState = { x: state.x, y: state.y, dir, depth, stepsLeft: state.stepsLeft, angVel: state.angVel, branchId: state.branchId, parentId: state.parentId };
-          const branchAId = ++branchSerial;
-          const branchBId = ++branchSerial;
-          const branchCone = (depth === 0) ? conePrimary : coneTwig;
-          const branchADir = rotateVec(dir, tierTheta);
-          const branchATheta = disableCone ? Math.atan2(branchADir.y, branchADir.x) : clampAngleToCone(Math.atan2(branchADir.y, branchADir.x), branchCone);
-          const branchBDir = rotateVec(dir, -tierTheta);
-          const branchBTheta = disableCone ? Math.atan2(branchBDir.y, branchBDir.x) : clampAngleToCone(Math.atan2(branchBDir.y, branchBDir.x), branchCone);
-          const branchA = { x: state.x, y: state.y, dir: { x: Math.cos(branchATheta), y: Math.sin(branchATheta) }, depth: depth + 1, stepsLeft: bSteps, angVel: state.angVel * 0.5, branchId: branchAId, parentId: state.branchId };
-          const branchB = { x: state.x, y: state.y, dir: { x: Math.cos(branchBTheta), y: Math.sin(branchBTheta) }, depth: depth + 1, stepsLeft: bSteps, angVel: state.angVel * 0.5, branchId: branchBId, parentId: state.branchId };
-          stack.push(trunkState);
-          stack.push(branchB);
-          branchesPushed += 2;
-          branchSpawns += 2;
-          branchEvents += 2;
-          tierEventsFired += 1;
-          stackMax = Math.max(stackMax, stack.length);
-          state = branchA;
-          depthMaxReached = Math.max(depthMaxReached, state.depth);
-          branchedNow = true;
-          recordSpawn(yC, depth, true);
-        }
-      }
-
-      if (!branchedNow && !noSignal && stepIndex >= minBranchStep && depth < maxDepth && budgetLeft > 0) {
-        const trunkProgress = clamp(trunkStepIndex / Math.max(1, trunkSteps), 0, 1);
-        const trunkRamp = smoothstep(0.0, 0.7, trunkProgress);
-        const apicalScale = unguarded ? 1 : (0.9 + 0.1 * trunkRamp);
-        const depthN2 = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
-        const tierMul = depthN2 < 0.33 ? 0.7 : (depthN2 < 0.66 ? 1.0 : 0.55);
-        const heightN = clamp((baseY - yC) / Math.max(1, baseY - canopyTop), 0, 1);
-        const topPenalty = smoothstep(0.55, 1.0, heightN);
-        const heightMul = lerp(2.4, 0.2, heightN);
-        const branchProbEff = branchProb * tierMul * apicalScale * (unguarded ? 1 : (heightMul * (1 - 0.65 * topPenalty)));
-        const trunkGate = clamp(trunkStepIndex / Math.max(1, trunkSteps), 0, 1);
-        const allowProb = unguarded ? 1 : (0.6 + 0.4 * trunkGate);
-        const r = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branch");
-        const forceBranch = (!noSignal && growthRel > 0.2 && branchEvents < 2 && (stepIndex === minBranchStep + 8 || stepIndex === minBranchStep + 22));
-        if ((r < branchProbEff * allowProb) || forceBranch) {
-          if (!canSpawnHere(depth + 1, yC, state.branchId, stepIndex)) {
-            tierSpawnsBlocked += 1;
-            recordSpawn(yC, depth + 1, false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
-          } else {
-            branchEvents += 1;
-            const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branchSign") < 0.5 ? -1 : 1;
-            const bAng = lerp(18, 32, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "branchAng")) * (Math.PI / 180);
-            const bDirRaw = rotateVec(dir, sign * bAng);
-            const branchCone = (depth === 0) ? conePrimary : coneTwig;
+          const dualRoll = seededRandom(seedKey || "", `scaf-dual:${scaffoldEventsFired}`);
+          const dualChance = lerp(0.15, 0.55, clamp(1 - linkageN, 0, 1));
+          const twoBranches = dualRoll < dualChance;
+          const scafAngle = lerp(28, 52, seededRandom(seedKey || "", `scaf-ang:${scaffoldEventsFired}`)) * (Math.PI / 180) * sig.crownWidth * grammar.angleBias;
+          const branchCone = conePrimary * 1.25;
+          const trunkState = { x: state.x, y: state.y, dir, depth: classDepth, stepsLeft: state.stepsLeft, angVel: state.angVel, branchId: state.branchId, parentId: state.parentId, className: state.className, localStep: state.localStep };
+          const spawnBranch = (sign) => {
+            const bDirRaw = rotateVec(dir, sign * scafAngle);
             const bTheta = disableCone ? Math.atan2(bDirRaw.y, bDirRaw.x) : clampAngleToCone(Math.atan2(bDirRaw.y, bDirRaw.x), branchCone);
             const bDir = { x: Math.cos(bTheta), y: Math.sin(bTheta) };
-            const bStepsRaw = Math.round(baseBranchSteps * Math.pow(0.72, depth));
-            const bSteps = clamp(bStepsRaw, 8, Math.floor(0.35 * maxSteps));
-            const trunkState = { x: state.x, y: state.y, dir, depth, stepsLeft: state.stepsLeft, angVel: state.angVel, branchId: state.branchId, parentId: state.parentId };
+            const bStepsRaw = Math.round(baseBranchSteps * 1.1);
+            const bSteps = clamp(Math.min(bStepsRaw, scaffoldStepsLeft), 10, Math.floor(0.4 * maxSteps));
+            const twigSchedule = [];
+            const clusterCount = clamp(Math.round(lerp(2, 6, seededRandom(seedKey || "", `twig-cl:${branchSerial}`))), 2, 6);
+            const clusterSizes = Array(clusterCount).fill(1);
+            let remaining = Math.max(0, twigPerScaffold - clusterCount);
+            let guard = 0;
+            while (remaining > 0 && guard < 2000) {
+              const idx = Math.floor(seededRandom(seedKey || "", `twig-cl-alloc:${branchSerial}:${guard}`) * clusterCount);
+              if (clusterSizes[idx] < 9) {
+                clusterSizes[idx] += 1;
+                remaining -= 1;
+              }
+              guard += 1;
+            }
+            const spreadBase = Math.max(2, Math.floor((bSteps * 0.08) * grammar.clusterSpread));
+            for (let c = 0; c < clusterCount; c++) {
+              const centerJitter = Math.round((seededRandom(seedKey || "", `twig-cl-center:${branchSerial}:${c}`) * 2 - 1) * Math.max(1, spreadBase));
+              const center = clamp(Math.round(((c + 1) / (clusterCount + 1)) * bSteps + centerJitter), 2, Math.max(2, bSteps - 1));
+              const count = clusterSizes[c];
+              const span = Math.max(1, Math.floor(spreadBase * 0.6));
+              for (let j = 0; j < count; j++) {
+                const offset = Math.round((j - (count - 1) / 2) * span);
+                const jitter = Math.round((seededRandom(seedKey || "", `twig-jit:${branchSerial}:${c}:${j}`) * 2 - 1) * Math.max(1, span * 0.35));
+                const idx = clamp(center + offset + jitter, 2, Math.max(2, bSteps - 1));
+                twigSchedule.push(idx);
+              }
+            }
+            const newBranchId = ++branchSerial;
+            const branchState = {
+              x: state.x,
+              y: state.y,
+              dir: bDir,
+              depth: classDepthFor("scaffold"),
+              stepsLeft: bSteps,
+              angVel: state.angVel * 0.5,
+              branchId: newBranchId,
+              parentId: state.branchId,
+              className: "scaffold",
+              localStep: 0,
+              curvBias: (seededRandom(seedKey || "", `scaf-curv:${newBranchId}`) * 2 - 1) * lerp(0.002, 0.01, grammar.curvScale),
+              curvVel: 0,
+              twigSchedule,
+              twigIndex: 0
+            };
             stack.push(trunkState);
             branchesPushed += 1;
             branchSpawns += 1;
             stackMax = Math.max(stackMax, stack.length);
-            const newBranchId = ++branchSerial;
-            state = { x: state.x, y: state.y, dir: bDir, depth: depth + 1, stepsLeft: bSteps, angVel: state.angVel * 0.5, branchId: newBranchId, parentId: state.branchId };
-            depthMaxReached = Math.max(depthMaxReached, state.depth);
-            branchedNow = true;
-            recordSpawn(yC, depth + 1, true);
+            state = branchState;
+          };
+          spawnBranch(1);
+          if (twoBranches) spawnBranch(-1);
+          scaffoldEventsFired += 1;
+          tierEventsFired = scaffoldEventsFired;
+          branchEvents += twoBranches ? 2 : 1;
+          depthMaxReached = Math.max(depthMaxReached, state.depth);
+          branchedNow = true;
+          recordSpawn(yC, classDepthFor("scaffold"), true);
+        }
+      }
+
+      if (!branchedNow && !noSignal && state.className === "scaffold" && Array.isArray(state.twigSchedule) && state.twigIndex < state.twigSchedule.length && budgetLeft > 2 && twigStepsLeft > 0) {
+        const targetStep = state.twigSchedule[state.twigIndex];
+        if (state.localStep >= targetStep && classDepth < maxDepth) {
+          const twigAngle = lerp(20, 38, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-ang")) * (Math.PI / 180) * sig.crownWidth;
+          const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-sign") < 0.5 ? -1 : 1;
+          const tDirRaw = rotateVec(dir, sign * twigAngle);
+          const branchCone = coneTwig * 1.2;
+          const tTheta = disableCone ? Math.atan2(tDirRaw.y, tDirRaw.x) : clampAngleToCone(Math.atan2(tDirRaw.y, tDirRaw.x), branchCone);
+          const tDir = { x: Math.cos(tTheta), y: Math.sin(tTheta) };
+          const tStepsRaw = Math.round(baseBranchSteps * 0.55);
+          const tSteps = clamp(Math.min(tStepsRaw, twigStepsLeft), 6, Math.floor(0.18 * maxSteps));
+          const microSchedule = [];
+          if (allowMicro && microTwigBudgetLeft > 0) {
+            const microCount = Math.min(2, microTwigBudgetLeft);
+            const microSpacing = Math.max(2, Math.floor(tSteps / (microCount + 1)));
+            for (let i = 0; i < microCount; i++) {
+              const jitter = Math.round((seededRandom(seedKey || "", `micro-jit:${branchSerial}:${i}`) * 2 - 1) * Math.max(1, microSpacing * 0.35));
+              const idx = clamp(Math.round((i + 1) * microSpacing + jitter), 2, Math.max(2, tSteps - 1));
+              microSchedule.push(idx);
+            }
+            microTwigBudgetLeft -= microCount;
           }
+          const scaffoldState = { ...state };
+          scaffoldState.twigIndex = (scaffoldState.twigIndex || 0) + 1;
+          const newBranchId = ++branchSerial;
+          state = {
+            x: state.x,
+            y: state.y,
+            dir: tDir,
+            depth: classDepthFor("twig"),
+            stepsLeft: tSteps,
+            angVel: state.angVel * 0.6,
+            branchId: newBranchId,
+            parentId: state.branchId,
+            className: "twig",
+            localStep: 0,
+            microSchedule,
+            microIndex: 0
+          };
+          stack.push(scaffoldState);
+          branchesPushed += 1;
+          branchSpawns += 1;
+          branchEvents += 1;
+          twigEventsFired += 1;
+          depthMaxReached = Math.max(depthMaxReached, state.depth);
+          branchedNow = true;
+          recordSpawn(yC, classDepthFor("twig"), true);
+        }
+      }
+
+      if (!branchedNow && !noSignal && state.className === "twig" && Array.isArray(state.microSchedule) && state.microIndex < state.microSchedule.length && budgetLeft > 1 && twigStepsLeft > 0) {
+        const targetStep = state.microSchedule[state.microIndex];
+        if (state.localStep >= targetStep && classDepth < maxDepth) {
+          const microAngle = lerp(16, 32, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-ang")) * (Math.PI / 180);
+          const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-sign") < 0.5 ? -1 : 1;
+          const mDirRaw = rotateVec(dir, sign * microAngle);
+          const branchCone = coneTwig * 1.25;
+          const mTheta = disableCone ? Math.atan2(mDirRaw.y, mDirRaw.x) : clampAngleToCone(Math.atan2(mDirRaw.y, mDirRaw.x), branchCone);
+          const mDir = { x: Math.cos(mTheta), y: Math.sin(mTheta) };
+          const mStepsRaw = Math.round(baseBranchSteps * 0.35);
+          const mSteps = clamp(Math.min(mStepsRaw, twigStepsLeft), 4, Math.floor(0.08 * maxSteps));
+          const twigState = { ...state };
+          twigState.microIndex = (twigState.microIndex || 0) + 1;
+          const newBranchId = ++branchSerial;
+          state = {
+            x: state.x,
+            y: state.y,
+            dir: mDir,
+            depth: classDepthFor("microTwig"),
+            stepsLeft: mSteps,
+            angVel: state.angVel * 0.7,
+            branchId: newBranchId,
+            parentId: state.branchId,
+            className: "microTwig",
+            localStep: 0
+          };
+          stack.push(twigState);
+          branchesPushed += 1;
+          branchSpawns += 1;
+          branchEvents += 1;
+          twigEventsFired += 1;
+          depthMaxReached = Math.max(depthMaxReached, state.depth);
+          branchedNow = true;
+          recordSpawn(yC, classDepthFor("microTwig"), true);
         }
       }
 
@@ -4557,6 +4760,13 @@
       yBins,
       spawnBins
     } : null;
+    const totalSegs = (classCounts.trunk || 0) + (classCounts.scaffold || 0) + (classCounts.twig || 0) + (classCounts.microTwig || 0);
+    const classShares = {
+      trunk: totalSegs ? (classCounts.trunk || 0) / totalSegs : 0,
+      scaffold: totalSegs ? (classCounts.scaffold || 0) / totalSegs : 0,
+      twig: totalSegs ? (classCounts.twig || 0) / totalSegs : 0,
+      microTwig: totalSegs ? (classCounts.microTwig || 0) / totalSegs : 0
+    };
 
     return {
       segments,
@@ -4568,6 +4778,13 @@
         stackMax,
         depthMaxReached,
         maxDepth,
+        classDepthMax: depthMaxReached,
+        trunkStepsTotal,
+        scaffoldStepsTotal,
+        twigStepsTotal,
+        trunkStepsUsed,
+        scaffoldStepsUsed,
+        twigStepsUsed,
         angVelRMS: angVelCount ? Math.sqrt(angVelSumSq / angVelCount) : 0,
         boundaryHits,
         occHits,
@@ -4579,6 +4796,19 @@
         spawnBlocked: tierSpawnsBlocked,
         boundaryAppliedCount,
         occAppliedCount,
+        scaffoldBudget,
+        twigBudget,
+        scaffoldEventsFired,
+        twigEventsFired,
+        meanScaffoldLen: scaffoldLenCount ? (scaffoldLenSum / scaffoldLenCount) : 0,
+        meanTwigLen: twigLenCount ? (twigLenSum / twigLenCount) : 0,
+        classCounts,
+        classShares,
+        grammarType,
+        sigLean: sig.lean,
+        sigCrownWidth: sig.crownWidth,
+        sigTierSpacing: sig.tierSpacing,
+        sigTaper: sig.taper,
         segGenCountByDepth,
         segGenAvgLenByDepth,
         genCountByDepthBin: segGenCountByDepth,
@@ -4637,6 +4867,13 @@
       stackMax: gen.meta?.stackMax ?? 0,
       depthMaxReached: gen.meta?.depthMaxReached ?? 0,
       maxDepth: gen.meta?.maxDepth ?? 0,
+      classDepthMax: gen.meta?.classDepthMax ?? 0,
+      trunkStepsTotal: gen.meta?.trunkStepsTotal ?? 0,
+      scaffoldStepsTotal: gen.meta?.scaffoldStepsTotal ?? 0,
+      twigStepsTotal: gen.meta?.twigStepsTotal ?? 0,
+      trunkStepsUsed: gen.meta?.trunkStepsUsed ?? 0,
+      scaffoldStepsUsed: gen.meta?.scaffoldStepsUsed ?? 0,
+      twigStepsUsed: gen.meta?.twigStepsUsed ?? 0,
       observedMaxDepth,
       angVelRMS: gen.meta?.angVelRMS ?? 0,
       boundaryHits: gen.meta?.boundaryHits ?? 0,
@@ -4656,6 +4893,19 @@
       segGenAngleMeanByDepth: gen.meta?.segGenAngleMeanByDepth || [],
       segGenAngleStdByDepth: gen.meta?.segGenAngleStdByDepth || [],
       spawnReport: gen.meta?.spawnReport || null,
+      sigLean: gen.meta?.sigLean ?? 0,
+      sigCrownWidth: gen.meta?.sigCrownWidth ?? 0,
+      sigTierSpacing: gen.meta?.sigTierSpacing ?? 0,
+      sigTaper: gen.meta?.sigTaper ?? 0,
+      scaffoldBudget: gen.meta?.scaffoldBudget ?? 0,
+      twigBudget: gen.meta?.twigBudget ?? 0,
+      scaffoldEventsFired: gen.meta?.scaffoldEventsFired ?? 0,
+      twigEventsFired: gen.meta?.twigEventsFired ?? 0,
+      meanScaffoldLen: gen.meta?.meanScaffoldLen ?? 0,
+      meanTwigLen: gen.meta?.meanTwigLen ?? 0,
+      classCounts: gen.meta?.classCounts || {},
+      classShares: gen.meta?.classShares || {},
+      grammarType: gen.meta?.grammarType ?? 0,
       branchIdCount,
       segmentsBeforeSanitize,
       segmentsAfterSanitize,
@@ -4825,6 +5075,11 @@
       const argumentN = clamp((metrics.argument || 0) / currentMax.argument, 0, 1);
       const diversityN = clamp((metrics.diversity || 0) / currentMax.diversity, 0, 1);
       const tasksN = clamp((metrics.tasks || 0) / currentMax.tasks, 0, 1);
+      const noteText = getCourseNotes(course);
+      const keywordCount = courseKeywords(ck).size;
+      const phraseCount = keyPhrases(noteText, 6).length;
+      const conceptsN = clamp((keywordCount / 12 + phraseCount / 6 + cohesionN) / 3, 0, 1);
+      const linkageN = clamp((conceptsN + cohesionN) / 2, 0, 1);
       const weeklyScore = weeklyScoreForCourse(course, weekId);
       const weeklyScoreN = clamp(weeklyScore.score || 0, 0, 1);
       const weekendDone = state.weekendTasks.filter(t => getCourseKey(t.course) === ck && t.done).length;
@@ -4850,7 +5105,7 @@
         weeklyScoreN,
         weekendScoreN,
         writingDays,
-        noteText: getCourseNotes(course),
+        noteText,
         modeDaily: mode?.dailyRatio ?? 0,
         modeWeekly: mode?.weeklyRatio ?? 0
       };
@@ -4864,7 +5119,19 @@
       const seedKey = `${ck}|${weekStartKey}|${dayKey}|v01|${seedSalt}`;
       const signalsHash = forestSignalsHash({ ...effectiveSignals, weekendRel, growthRel, effortAbs: computeEffortAbs(effectiveSignals.tasks || 0, effectiveSignals.writingDays || 0, effectiveSignals.words || 0) });
 
-      let params = { growthRel, targetFrac, maxSteps, weekendRel, noSignal, simulateMax, __simulateMax: effectiveSignals.__simulateMax };
+      let params = {
+        growthRel,
+        targetFrac,
+        maxSteps,
+        weekendRel,
+        noSignal,
+        simulateMax,
+        __simulateMax: effectiveSignals.__simulateMax,
+        tasksN,
+        conceptsN,
+        linkageN,
+        diversityN
+      };
       let snapshot = null;
       let geomSource = "fallback";
       let regenNeeded = false;
@@ -4914,8 +5181,22 @@
       const segStats = computeSegmentStats(segments);
       const availH = Math.max(1, cell.h - TOP_PAD - BOTTOM_PAD);
       const minTargetPx = simulateMax ? 220 : 70;
-      const targetH = Math.max(availH * params.targetFrac, minTargetPx);
-      const s = Math.min((0.90 * cell.w) / Math.max(1e-6, bounds.width), targetH / Math.max(1e-6, bounds.height));
+      let targetH = Math.max(availH * params.targetFrac, minTargetPx);
+      if (simulateMax) {
+        const headroom = 50;
+        const sigCrownN = clamp(((geomMeta.sigCrownWidth ?? 1.0) - 0.6) / 1.0, 0, 1);
+        const heightMul = lerp(0.92, 1.06, sigCrownN);
+        targetH = Math.min(targetH * heightMul, Math.max(1, availH - headroom));
+      }
+      const maxBoundsDim = 2400;
+      const effBoundsW = Math.min(bounds.width, maxBoundsDim);
+      const effBoundsH = Math.min(bounds.height, maxBoundsDim);
+      const xScaleCap = (0.90 * cell.w) / Math.max(1e-6, effBoundsW);
+      const yScaleRaw = targetH / Math.max(1e-6, effBoundsH);
+      const widthLimited = xScaleCap < yScaleRaw;
+      let s = Math.min(xScaleCap, yScaleRaw);
+      const heightWins = widthLimited && xScaleCap < (yScaleRaw * 0.2);
+      if (heightWins) s = yScaleRaw;
       const targetX = cell.x + cell.w / 2;
       const targetY = cell.y + cell.h - 10;
       const anchorX = (bounds.minX + bounds.maxX) / 2;
@@ -4938,21 +5219,47 @@
         targetFrac,
         maxStepsUsed: simulateMax ? MAX_STEPS : params.maxSteps,
         bounds,
+        effBoundsW,
+        effBoundsH,
         scale: s,
         targetH,
         availH,
         heightFill: (bounds.height * s) / Math.max(1e-6, availH),
+        widthLimited,
+        heightWins,
+        xScaleCap,
+        yScaleRaw,
         spawnReport: geomMeta.spawnReport || null,
         segBefore: geomMeta.segBefore ?? geomMeta.segmentsBeforeSanitize ?? segments.length,
         segAfter: geomMeta.segAfter ?? geomMeta.segmentsAfterSanitize ?? segments.length,
         densityCapApplied: geomMeta.densityCapApplied ?? sanitized.densityCapApplied ?? false,
         redoTriggered: !!(geomMeta.redoTriggered ?? sanitized.redoTriggered),
         observedMaxDepth: geomMeta.observedMaxDepth ?? geomMeta.depthMaxReached ?? 0,
+        classDepthMax: geomMeta.classDepthMax ?? 0,
+        trunkStepsUsed: geomMeta.trunkStepsUsed ?? 0,
+        scaffoldStepsUsed: geomMeta.scaffoldStepsUsed ?? 0,
+        twigStepsUsed: geomMeta.twigStepsUsed ?? 0,
+        trunkStepsTotal: geomMeta.trunkStepsTotal ?? 0,
+        scaffoldStepsTotal: geomMeta.scaffoldStepsTotal ?? 0,
+        twigStepsTotal: geomMeta.twigStepsTotal ?? 0,
         tierEventsFired: geomMeta.tierEventsFired ?? 0,
         branchSpawns: geomMeta.branchSpawns ?? 0,
         spawnBlocked: geomMeta.spawnBlocked ?? 0,
         occAppliedCount: geomMeta.occAppliedCount ?? 0,
         boundaryAppliedCount: geomMeta.boundaryAppliedCount ?? 0,
+        sigLean: geomMeta.sigLean ?? 0,
+        sigCrownWidth: geomMeta.sigCrownWidth ?? 0,
+        sigTierSpacing: geomMeta.sigTierSpacing ?? 0,
+        sigTaper: geomMeta.sigTaper ?? 0,
+        scaffoldBudget: geomMeta.scaffoldBudget ?? 0,
+        twigBudget: geomMeta.twigBudget ?? 0,
+        scaffoldEventsFired: geomMeta.scaffoldEventsFired ?? 0,
+        twigEventsFired: geomMeta.twigEventsFired ?? 0,
+        meanScaffoldLen: geomMeta.meanScaffoldLen ?? 0,
+        meanTwigLen: geomMeta.meanTwigLen ?? 0,
+        classCounts: geomMeta.classCounts || {},
+        classShares: geomMeta.classShares || {},
+        grammarType: geomMeta.grammarType ?? 0,
         genCountByDepthBin: geomMeta.genCountByDepthBin || geomMeta.segGenCountByDepth || [],
         stepLenAvgByDepthBin: geomMeta.stepLenAvgByDepthBin || geomMeta.segGenAvgLenByDepth || [],
         keptCount: geomMeta.keptCount ?? sanitized.keptCount ?? segments.length,
@@ -5076,13 +5383,29 @@
           segKept,
           keepRatio: Number(keepRatio.toFixed(3)),
           observedMaxDepth: s.observedMaxDepth ?? 0,
-          tierEventsFired: s.tierEventsFired ?? 0,
+          classDepthMax: s.classDepthMax ?? 0,
+          trunkSteps: `${s.trunkStepsUsed ?? 0}/${s.trunkStepsTotal ?? 0}`,
+          scaffoldSteps: `${s.scaffoldStepsUsed ?? 0}/${s.scaffoldStepsTotal ?? 0}`,
+          twigSteps: `${s.twigStepsUsed ?? 0}/${s.twigStepsTotal ?? 0}`,
+          scaffoldBudget: s.scaffoldBudget ?? 0,
+          twigBudget: s.twigBudget ?? 0,
+          scaffoldEventsFired: s.scaffoldEventsFired ?? 0,
+          twigEventsFired: s.twigEventsFired ?? 0,
+          meanScaffoldLen: Number((s.meanScaffoldLen ?? 0).toFixed(1)),
+          meanTwigLen: Number((s.meanTwigLen ?? 0).toFixed(1)),
+          classCounts: JSON.stringify(s.classCounts || {}),
+          classShares: JSON.stringify(s.classShares || {}),
+          grammarType: s.grammarType ?? 0,
           branchSpawns: s.branchSpawns ?? 0,
           spawnBlocked: s.spawnBlocked ?? 0,
           occAppliedCount: s.occAppliedCount ?? 0,
           boundaryAppliedCount: s.boundaryAppliedCount ?? 0,
           redoTriggered: !!s.redoTriggered,
-          densityCapApplied: !!s.densityCapApplied
+          densityCapApplied: !!s.densityCapApplied,
+          sigLean: Number((s.sigLean ?? 0).toFixed(2)),
+          sigCrownWidth: Number((s.sigCrownWidth ?? 0).toFixed(2)),
+          sigTierSpacing: Number((s.sigTierSpacing ?? 0).toFixed(2)),
+          sigTaper: Number((s.sigTaper ?? 0).toFixed(2))
         };
       });
       console.table(rows);
