@@ -1892,23 +1892,36 @@
       notes.placeholder = "Keep it short. Capture confusion early.";
       notes.addEventListener("input", () => {
         state.courseNotes[course].notes = notes.value;
-        updateWeeklySession(course, notes.value);
         saveState();
-        const weekId = currentWeekId();
-        const weekly = weeklyScoreForCourse(course, weekId);
-        const todayKey = etDateKey();
-        const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
-        weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions}/6 • Today: ${(dayScore * 100).toFixed(0)}%`;
-        debouncedForest(); // update forest as you write
         debouncedGraph();
       });
       card.appendChild(notes);
 
       const weekId = currentWeekId();
-      const weekly = weeklyScoreForCourse(course, weekId);
       const todayKey = etDateKey();
-      const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
-      weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions}/6 • Today: ${(dayScore * 100).toFixed(0)}%`;
+      const updateWeeklyBadge = () => {
+        const weekly = weeklyScoreForCourse(course, weekId);
+        const dayScore = (state.forest.weekly?.courses?.[course]?.days?.[todayKey] || 0);
+        weeklyBadge.textContent = `Weekly sessions: ${weekly.sessions}/6 • Today: ${(dayScore * 100).toFixed(0)}%`;
+      };
+      updateWeeklyBadge();
+
+      const synthRow = document.createElement("div");
+      synthRow.className = "row";
+      synthRow.style.marginTop = "8px";
+      const synthBtn = document.createElement("button");
+      const isDone = !!(state.forest.weekly?.courses?.[course]?.days?.[todayKey]);
+      synthBtn.className = "btn-secondary";
+      synthBtn.textContent = isDone ? "Daily synthesis complete ✓" : "Mark daily synthesis complete";
+      synthBtn.addEventListener("click", () => {
+        const nowDone = !(state.forest.weekly?.courses?.[course]?.days?.[todayKey]);
+        setDailySynthesis(course, nowDone);
+        synthBtn.textContent = nowDone ? "Daily synthesis complete ✓" : "Mark daily synthesis complete";
+        updateWeeklyBadge();
+        renderCourseCards();
+      });
+      synthRow.appendChild(synthBtn);
+      card.appendChild(synthRow);
 
     courseCardsEl.appendChild(card);
   });
@@ -3404,12 +3417,13 @@
     const store = getWeeklyStore(weekId);
     const dayKey = etDateKey();
     store.courses[course] = store.courses[course] || { days: {}, total: 0 };
-    const score = noteSessionScore(notes);
+    let score = noteSessionScore(notes);
+    if (!Number.isFinite(score) || score <= 0) score = 0.2;
     if (score <= 0) return;
     const prev = store.courses[course].days[dayKey] || 0;
     if (score > prev) {
       store.courses[course].days[dayKey] = score;
-      const total = Object.values(store.courses[course].days).reduce((sum, v) => sum + v, 0);
+      const total = Object.values(store.courses[course].days).filter(Number.isFinite).reduce((sum, v) => sum + v, 0);
       store.courses[course].total = total;
       saveState();
     }
@@ -3419,10 +3433,48 @@
     const store = getWeeklyStore(weekId);
     const c = store.courses[course];
     if (!c) return { score: 0, sessions: 0 };
-    const scores = Object.values(c.days || {});
+    const scores = Object.values(c.days || {}).filter(Number.isFinite);
     const sessions = scores.filter(s => s >= 0.2).length;
     const score = clamp(scores.reduce((sum, s) => sum + s, 0) / 5, 0, 1);
     return { score, sessions };
+  }
+
+  function computeCourseAnalysis(course, notes) {
+    const metrics = computeLinguisticMetrics(notes);
+    state.courseNotes[course] = state.courseNotes[course] || { status: "steady", focus: "", budget: "", notes: "" };
+    state.courseNotes[course].analysis = {
+      words: metrics.words || 0,
+      recursionScore: metrics.recursionScore || 0,
+      abstractionScore: metrics.abstractionScore || 0,
+      cohesionScore: metrics.cohesionScore || 0,
+      argumentScore: metrics.argumentScore || 0,
+      diversityScore: metrics.diversityScore || 0,
+      dayKey: etDateKey(),
+      ts: Date.now()
+    };
+    return state.courseNotes[course].analysis;
+  }
+
+  function setDailySynthesis(course, done) {
+    const weekId = currentWeekId();
+    const store = getWeeklyStore(weekId);
+    const dayKey = etDateKey();
+    store.courses[course] = store.courses[course] || { days: {}, total: 0 };
+    if (!done) {
+      delete store.courses[course].days[dayKey];
+      if (state.courseNotes?.[course]) state.courseNotes[course].analysis = null;
+    } else {
+      const notes = state.courseNotes?.[course]?.notes || "";
+      computeCourseAnalysis(course, notes);
+      let score = noteSessionScore(notes);
+      if (!Number.isFinite(score) || score <= 0) score = 0.2;
+      store.courses[course].days[dayKey] = score;
+    }
+    const total = Object.values(store.courses[course].days).filter(Number.isFinite).reduce((sum, v) => sum + v, 0);
+    store.courses[course].total = total;
+    saveState();
+    renderWeekSummary();
+    debouncedForest();
   }
 
   function computeForestMetrics() {
@@ -3431,8 +3483,15 @@
     let total = 0;
 
     courses.forEach((course) => {
-      const notes = (state.courseNotes[course]?.notes || "");
-      const metrics = computeLinguisticMetrics(notes);
+      const analysis = state.courseNotes?.[course]?.analysis || null;
+      const metrics = analysis || {
+        words: 0,
+        recursionScore: 0,
+        abstractionScore: 0,
+        cohesionScore: 0,
+        argumentScore: 0,
+        diversityScore: 0
+      };
       const words = metrics.words || 0;
       const tasks = state.todayTasks.filter(t => t.course === course && t.done).length
         + state.weekendTasks.filter(t => t.course === course && t.done).length;
@@ -3442,11 +3501,11 @@
 
       perCourse[course] = {
         words,
-        recursion: metrics.recursionScore,
-        abstraction: metrics.abstractionScore,
-        cohesion: metrics.cohesionScore,
-        argument: metrics.argumentScore,
-        diversity: metrics.diversityScore,
+        recursion: metrics.recursionScore || 0,
+        abstraction: metrics.abstractionScore || 0,
+        cohesion: metrics.cohesionScore || 0,
+        argument: metrics.argumentScore || 0,
+        diversity: metrics.diversityScore || 0,
         tasks,
         stress
       };
@@ -4183,6 +4242,8 @@
   function generateSegmentsTreeV01(seedKey, params) {
     const growthRel = clamp(params.growthRel ?? 0, 0, 1);
     const isSimMax = !!(params?.simulateMax || params?.__simulateMax);
+    const scoreN = clamp(params.weeklyScoreN ?? params.growthRel ?? 0, 0, 1);
+    const angleScale = 1;
     const unguarded = !!V01_UNGUARDED;
     const disableOcc = getV01DebugFlag("V01_DEBUG_DISABLE_OCC") || unguarded;
     const disableTier = getV01DebugFlag("V01_DEBUG_DISABLE_TIER");
@@ -4701,7 +4762,7 @@
           const dualRoll = seededRandom(seedKey || "", `scaf-dual:${scaffoldEventsFired}`);
           const dualChance = lerp(0.15, 0.55, clamp(1 - linkageN, 0, 1));
           const twoBranches = dualRoll < dualChance;
-          const scafAngle = lerp(28, 52, seededRandom(seedKey || "", `scaf-ang:${scaffoldEventsFired}`)) * (Math.PI / 180) * sig.crownWidth * grammar.angleBias;
+          const scafAngle = lerp(28, 52, seededRandom(seedKey || "", `scaf-ang:${scaffoldEventsFired}`)) * (Math.PI / 180) * sig.crownWidth * grammar.angleBias * angleScale;
           const branchCone = conePrimary * 1.25;
           const trunkState = { x: state.x, y: state.y, dir, depth: classDepth, stepsLeft: state.stepsLeft, angVel: state.angVel, branchId: state.branchId, parentId: state.parentId, className: state.className, localStep: state.localStep };
           const spawnBranch = (sign) => {
@@ -4786,7 +4847,7 @@
             branchedNow = true;
           } else {
             state.twigDefers = 0;
-          const twigAngle = lerp(20, 38, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-ang")) * (Math.PI / 180) * sig.crownWidth;
+          const twigAngle = lerp(20, 38, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-ang")) * (Math.PI / 180) * sig.crownWidth * angleScale;
           const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-sign") < 0.5 ? -1 : 1;
           const tDirRaw = rotateVec(dir, sign * twigAngle);
           const branchCone = coneTwig * 1.2;
@@ -4847,7 +4908,7 @@
             branchedNow = true;
           } else {
             state.microDefers = 0;
-          const microAngle = lerp(16, 32, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-ang")) * (Math.PI / 180);
+          const microAngle = lerp(16, 32, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-ang")) * (Math.PI / 180) * angleScale;
           const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-sign") < 0.5 ? -1 : 1;
           const mDirRaw = rotateVec(dir, sign * microAngle);
           const branchCone = coneTwig * 1.25;
@@ -5133,6 +5194,54 @@
     ctx.restore();
   }
 
+  function renderV01Leaves(ctx, segments, seedKey, weekendRel, stressN, scale, maxDepth = 0) {
+    if (!leavesEnabled) return;
+    if (!(weekendRel > 0)) return;
+    if (!segments.length) return;
+    const greens = ["#1b3f2f", "#2a5f3a", "#3b6f4a", "#4f7f5c", "#6f8f3b", "#b98c2a", "#f4a7b9", "#f2d35e"];
+    const fall = ["#a35c2d", "#ed6d3d", "#f08300", "#ca6924", "#b4403b", "#9d2933", "#e16b8c", "#6d4c41"];
+    const deep = ["#3b0f1a", "#5b0a2a", "#7a0f3d", "#4a1030", "#2d0b1f", "#1a0b12", "#3a0a0a", "#0f0a12"];
+    const palette = (stressN < 0.35) ? greens : (stressN < 0.7) ? fall : deep;
+    const stressFactor = lerp(1.35, 0.12, clamp(stressN, 0, 1));
+    const density = clamp((0.06 + 0.24 * weekendRel) * stressFactor, 0.01, 0.32);
+    const maxLeaves = Math.min(900, Math.floor(segments.length * density * 1.2));
+    let emitted = 0;
+    const basePx = 2.2;
+    for (let i = 0; i < segments.length; i++) {
+      if (emitted >= maxLeaves) break;
+      const s = segments[i];
+      if (!s) continue;
+      const cls = s.className || "trunk";
+      const classWeight = cls === "trunk" ? 0.4 : (cls === "scaffold" ? 0.85 : 1.2);
+      const depth = Number.isFinite(s.depth) ? s.depth : 0;
+      const dN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
+      const p = density * classWeight * lerp(0.7, 1.15, dN);
+      const roll = seededRandom(seedKey || "", `v01-leaf:${i}:r`);
+      if (roll > p) continue;
+      const t = seededRandom(seedKey || "", `v01-leaf:${i}:t`);
+      const x = s.x1 + (s.x2 - s.x1) * t;
+      const y = s.y1 + (s.y2 - s.y1) * t;
+      const jitter = (seededRandom(seedKey || "", `v01-leaf:${i}:j`) - 0.5) * 6;
+      const ang = (seededRandom(seedKey || "", `v01-leaf:${i}:a`) * Math.PI * 2);
+      const sizeRand = seededRandom(seedKey || "", `v01-leaf:${i}:s`);
+      const alphaRand = seededRandom(seedKey || "", `v01-leaf:${i}:o`);
+      const color = palette[Math.floor(seededRandom(seedKey || "", `v01-leaf:${i}:c`) * palette.length)];
+      const px = basePx * lerp(0.8, 1.6, sizeRand);
+      const rx = (px * lerp(0.9, 1.4, sizeRand)) / Math.max(1e-6, scale);
+      const ry = (px * lerp(0.6, 1.1, sizeRand)) / Math.max(1e-6, scale);
+      ctx.save();
+      ctx.translate(x, y + jitter);
+      ctx.rotate(ang);
+      ctx.globalAlpha = lerp(0.25, 0.6, alphaRand);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      emitted += 1;
+    }
+  }
+
   function getSimMaxSignals(base) {
     const s = { ...base };
     s.words = Math.max(2200, s.words || 0);
@@ -5285,6 +5394,7 @@
         noSignal,
         simulateMax,
         __simulateMax: effectiveSignals.__simulateMax,
+        weeklyScoreN,
         tasksN,
         conceptsN,
         linkageN,
@@ -5308,6 +5418,7 @@
       if (simulateMax) {
         params.growthRel = 1;
         params.weekendRel = 1;
+        params.weeklyScoreN = 1;
         params.maxSteps = MAX_STEPS;
       }
 
@@ -5366,7 +5477,20 @@
         ctx.scale(s, s);
         ctx.translate(-anchorX, -anchorY);
         drawGeomSegments(ctx, segments, s, maxDepthForRender);
+        renderV01Leaves(ctx, segments, seedKey, weekendRel, metrics.stress || 0, s, maxDepthForRender);
       } finally {
+        ctx.restore();
+      }
+
+      // Course labels (canvas)
+      if (labelBand > 0) {
+        ctx.save();
+        ctx.fillStyle = getCSSVar("--text");
+        ctx.font = `bold 12px ${getCSSVar("--sans")}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const labelY = cell.labelY - labelBand * 0.5 + 5;
+        ctx.fillText(ck, cell.x + cell.w * 0.5, labelY);
         ctx.restore();
       }
 
@@ -8626,8 +8750,20 @@
       state.proseTargets = "";
       state.proseNotes = "";
       state.mdCache = "";
+      const dayKey = etDateKey();
+      const store = getWeeklyStore(currentWeekId());
+      Object.keys(state.courseNotes || {}).forEach((course) => {
+        state.courseNotes[course].notes = "";
+        state.courseNotes[course].analysis = null;
+        if (store?.courses?.[course]?.days) delete store.courses[course].days[dayKey];
+      });
+      Object.keys(store?.courses || {}).forEach((course) => {
+        const days = store.courses[course]?.days || {};
+        store.courses[course].total = Object.values(days).filter(Number.isFinite).reduce((sum, v) => sum + v, 0);
+      });
       saveState();
       hydrateInputs();
+      renderCourseCards();
       mdPreviewEl.textContent = "(Generate markdown to preview here.)";
       toast("Cleared daily inputs");
     });
@@ -8648,6 +8784,7 @@
       Object.keys(state.courseNotes || {}).forEach((course) => {
         state.courseNotes[course].notes = "";
         state.courseNotes[course].status = "steady";
+        state.courseNotes[course].analysis = null;
       });
       state.llmNoteAnalyses = {};
       state.llmConferenceResponse = "";
