@@ -879,12 +879,14 @@
     // Forest
     forest: {
       legendOn: false,
-      weekId: "",
-      perCourseMax: {},   // max-memory for writing volume / syntax / cohesion / completed tasks
       hiResPng: false,
       showFullGhost: false,
       simulateMax: false,
       weekly: { weekId: "", courses: {} },
+      legacy: {
+        weekId: "",
+        perCourseMax: {}   // max-memory for writing volume / syntax / cohesion / completed tasks
+      }
     }
   };
 
@@ -959,13 +961,35 @@
     return s;
   }
 
+  function migrateForestState(s) {
+    s.forest = s.forest || structuredDefault().forest;
+    s.forest.legacy = s.forest.legacy || { weekId: "", perCourseMax: {} };
+    if (s.forest.weekId != null) {
+      if (!s.forest.legacy.weekId) s.forest.legacy.weekId = s.forest.weekId;
+      delete s.forest.weekId;
+    }
+    if (s.forest.perCourseMax) {
+      if (!s.forest.legacy.perCourseMax || !Object.keys(s.forest.legacy.perCourseMax).length) {
+        s.forest.legacy.perCourseMax = s.forest.perCourseMax;
+      }
+      delete s.forest.perCourseMax;
+    }
+    return s;
+  }
+
+  function getLegacyForest() {
+    state.forest = state.forest || structuredDefault().forest;
+    state.forest.legacy = state.forest.legacy || { weekId: "", perCourseMax: {} };
+    return state.forest.legacy;
+  }
+
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return structuredDefault();
       const parsed = migrateState(JSON.parse(raw));
       const def = structuredDefault();
-      return {
+      const merged = {
         ...def,
         ...parsed,
         version: CURRENT_VERSION,
@@ -973,6 +997,7 @@
         modeScope:  { ...def.modeScope,  ...(parsed.modeScope||{})  },
         forest:     { ...def.forest,     ...(parsed.forest||{})     },
       };
+      return migrateForestState(merged);
     } catch {
       return structuredDefault();
     }
@@ -980,9 +1005,52 @@
 
   let state = loadState();
 
+  function pruneV01SnapshotsInPlace(v01, opts = {}) {
+    if (!v01?.snapshots) return;
+    const keepWeeks = opts.keepWeeks ?? 1;
+    const keepDaysPerCourse = opts.keepDaysPerCourse ?? 3;
+    const weekKeys = Object.keys(v01.snapshots).sort();
+    const keepSet = new Set(weekKeys.slice(-keepWeeks));
+    for (const wk of weekKeys) {
+      if (!keepSet.has(wk)) delete v01.snapshots[wk];
+    }
+    for (const wk of Object.keys(v01.snapshots)) {
+      const courses = v01.snapshots[wk]?.courses || {};
+      Object.keys(courses).forEach((ck) => {
+        const days = courses[ck]?.days || {};
+        const dayKeys = Object.keys(days).sort();
+        const keepDays = new Set(dayKeys.slice(-keepDaysPerCourse));
+        dayKeys.forEach((dk) => {
+          if (!keepDays.has(dk)) delete days[dk];
+        });
+      });
+    }
+  }
+
+  function safeLocalStorageSetItem(key, value) {
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      if (String(e && e.name) === "QuotaExceededError") {
+        try {
+          if (state?.forest?.v01?.snapshots) {
+            pruneV01SnapshotsInPlace(state.forest.v01, { keepWeeks: 1, keepDaysPerCourse: 3 });
+          }
+          localStorage.setItem(key, JSON.stringify(state));
+          return true;
+        } catch {
+          console.warn("Save skipped: quota exceeded even after pruning");
+          return false;
+        }
+      }
+      throw e;
+    }
+  }
+
   function saveState() {
     state.version = CURRENT_VERSION;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    safeLocalStorageSetItem(STORAGE_KEY, JSON.stringify(state));
   }
 
   let saveStateTimer = null;
@@ -997,14 +1065,14 @@
   function applyImportedState(raw) {
     const parsed = migrateState(raw || {});
     const def = structuredDefault();
-    state = {
+    state = migrateForestState({
       ...def,
       ...parsed,
       version: CURRENT_VERSION,
       modeChecks: { ...def.modeChecks, ...(parsed.modeChecks || {}) },
       modeScope: { ...def.modeScope, ...(parsed.modeScope || {}) },
       forest: { ...def.forest, ...(parsed.forest || {}) }
-    };
+    });
     saveState();
     hydrateInputs();
   }
@@ -1280,8 +1348,15 @@
     ].join("|");
   }
 
-  const geomCache = new Map();
-  const prevGeomByKey = new Map();
+  const forestRuntime = {
+    legacy: {
+      geomCache: new Map(),
+      prevGeomByKey: new Map()
+    },
+    v01: {}
+  };
+  const geomCache = forestRuntime.legacy.geomCache;
+  const prevGeomByKey = forestRuntime.legacy.prevGeomByKey;
 
   function invalidateForestCaches() {
     geomCache.clear();
@@ -2994,7 +3069,7 @@
     const writingText = normalizeText([state.writingSchedule, state.writingThread, state.writingTargets, state.writingNotes].filter(Boolean).join(" "));
     const proseText = normalizeText([state.proseSchedule, state.proseProject, state.proseTargets, state.proseNotes].filter(Boolean).join(" "));
 
-    const perCourseMax = state.forest.perCourseMax || {};
+    const perCourseMax = getLegacyForest().perCourseMax || {};
     const averages = courseList.length
       ? courseList.reduce((acc, course) => {
         const cur = perCourse[course] || {};
@@ -3443,14 +3518,15 @@
     return { nodes: [], edges: [], weeklyByCourse: {}, conceptByCourse: {} };
   }
 
-  function buildFullGhost(w, h, padL, padR, padT, baseY, perCourse, mode, weekId) {
+  function _buildFullGhost_impl(w, h, padL, padR, padT, baseY, perCourse, mode, weekId) {
+    const legacy = getLegacyForest();
     const courses = state.courses || [];
     const simulateMax = !!state.forest.simulateMax;
     const seedSalt = getUserSeedSalt();
     const weekStartKey = isoWeekStartKey(weekId);
     const count = Math.max(1, courses.length);
     const spacing = w / (count + 1);
-    const maxSource = simulateMax ? (state.forest.perCourseMax || {}) : perCourse;
+    const maxSource = simulateMax ? (legacy.perCourseMax || {}) : perCourse;
     const currentMax = {
       words: Math.max(1, ...Object.values(maxSource).map(m => m.words || 0)),
       recursion: Math.max(0.1, ...Object.values(maxSource).map(m => m.recursion || 0)),
@@ -3468,7 +3544,7 @@
     courses.forEach((course, idx) => {
       const x0 = spacing * (idx + 1);
       const metrics = perCourse[course] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
-      const maxMetrics = (state.forest.perCourseMax || {})[course] || {};
+      const maxMetrics = (legacy.perCourseMax || {})[course] || {};
       const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
       const recursionN = clamp((metrics.recursion || 0) / currentMax.recursion, 0, 1);
       const abstractionN = clamp((metrics.abstraction || 0) / currentMax.abstraction, 0, 1);
@@ -3572,6 +3648,13 @@
       }, ghostGeom);
     });
     return ghostGeom;
+  }
+
+  function buildFullGhost(...args) {
+    if (FOREST_ENGINE === "v01") {
+      throw new Error("Legacy ghost blocked (FOREST_ENGINE=v01)");
+    }
+    return _buildFullGhost_impl(...args);
   }
 
   function applyOrderedDither(ctx, w, h, strength = 0.05) {
@@ -3929,6 +4012,7 @@
   }
 
   const geomCacheV01 = new Map();
+  forestRuntime.v01.geomCache = geomCacheV01;
 
   function getGeomCacheKeyV01({ ck, weekId, dayKey, modeKey, simulateMax, signalsHash }) {
     return ["v01", ck, weekId, dayKey, modeKey, simulateMax ? 1 : 0, signalsHash || "0"].join("|");
@@ -3980,6 +4064,7 @@
     const segKeptLenSumByDepth = Array(depthBins).fill(0);
     const clean = [];
     let minLenBaseUsed = minLenBase;
+    const disableRedo = getV01DebugFlag("V01_DEBUG_DISABLE_SANITIZE_REDO");
 
     const keepPass = (scale = 1) => {
       clean.length = 0;
@@ -4006,7 +4091,7 @@
     const minKeep = Math.max(40, Math.floor(segGen * 0.55));
     let sanitizeRedo = false;
     let redoTriggered = false;
-    if (clean.length < minKeep && segments.length) {
+    if (!disableRedo && clean.length < minKeep && segments.length) {
       sanitizeRedo = true;
       redoTriggered = true;
       keepPass(0.65);
@@ -4051,7 +4136,18 @@
     }
 
     const segKeptAvgLenByDepth = segKeptCountByDepth.map((c, i) => c ? (segKeptLenSumByDepth[i] / c) : 0);
-    return { segments: clean, segKeptCountByDepth, segKeptAvgLenByDepth, sanitizeRedo, redoTriggered, hardCapSegmentsUsed, densityCapApplied, minLenBaseUsed };
+    return {
+      segments: clean,
+      segKeptCountByDepth,
+      segKeptAvgLenByDepth,
+      sanitizeRedo,
+      redoTriggered,
+      hardCapSegmentsUsed,
+      densityCapApplied,
+      minLenBaseUsed,
+      keptCount: clean.length,
+      genCount: segGen
+    };
   }
 
   function computeSegmentStats(segments) {
@@ -4258,8 +4354,8 @@
       const depthN = maxDepth > 0 ? clamp(depth / maxDepth, 0, 1) : 0;
       const steerGain = lerp(1.0, 0.35, Math.pow(depthN, 0.8));
       const maxSteer = (depth === 0 ? (6 * (Math.PI / 180)) : (10 * (Math.PI / 180)));
-      let boundary = 0;
-      if (!unguarded && mN > 0.35) {
+    let boundary = 0;
+      if (!unguarded && !disableOcc && mN > 0.35) {
         boundary = boundaryTurn(dirAngle, xC, yC, canvasW, canvasH, wind.boundaryBand, wind.boundaryGain);
         const branchBoundaryScale = (depth === 0) ? 1 : 0.25;
         boundary = clamp(boundary, -maxSteer, maxSteer) * steerGain * 0.65 * branchBoundaryScale;
@@ -4485,6 +4581,8 @@
         occAppliedCount,
         segGenCountByDepth,
         segGenAvgLenByDepth,
+        genCountByDepthBin: segGenCountByDepth,
+        stepLenAvgByDepthBin: segGenAvgLenByDepth,
         segGenAngleMeanByDepth,
         segGenAngleStdByDepth,
         spawnReport
@@ -4553,6 +4651,8 @@
       spawnBlocked: gen.meta?.spawnBlocked ?? gen.meta?.tierSpawnsBlocked ?? 0,
       segGenCountByDepth: gen.meta?.segGenCountByDepth || [],
       segGenAvgLenByDepth: gen.meta?.segGenAvgLenByDepth || [],
+      genCountByDepthBin: gen.meta?.genCountByDepthBin || gen.meta?.segGenCountByDepth || [],
+      stepLenAvgByDepthBin: gen.meta?.stepLenAvgByDepthBin || gen.meta?.segGenAvgLenByDepth || [],
       segGenAngleMeanByDepth: gen.meta?.segGenAngleMeanByDepth || [],
       segGenAngleStdByDepth: gen.meta?.segGenAngleStdByDepth || [],
       spawnReport: gen.meta?.spawnReport || null,
@@ -4569,6 +4669,8 @@
       redoTriggered: !!sanitized.redoTriggered,
       hardCapSegmentsUsed: !!sanitized.hardCapSegmentsUsed,
       densityCapApplied: !!sanitized.densityCapApplied,
+      keptCount: sanitized.keptCount ?? segmentsAfterSanitize,
+      genCount: sanitized.genCount ?? segmentsBeforeSanitize,
       segKeptCountByDepth: sanitized.segKeptCountByDepth || [],
       segKeptAvgLenByDepth: sanitized.segKeptAvgLenByDepth || [],
       minLenBaseUsed: sanitized.minLenBaseUsed ?? 0
@@ -4669,8 +4771,8 @@
     }
     perCourse = perCourse || {};
     mode = mode || { dailyRatio: 0, weeklyRatio: 0 };
-    if (state.forest.weekId !== weekId) {
-      state.forest.weekId = weekId;
+    if (v01Store.weekId !== weekId) {
+      v01Store.weekId = weekId;
       geomCacheV01.clear();
       saveStateSoon();
     }
@@ -4698,7 +4800,7 @@
     const cells = buildCourseCells(w, h, courses, padL, padR, padT, padB, labelBand);
 
     // max metrics for normalization
-    const maxSource = simulateMax ? (state.forest.perCourseMax || {}) : perCourse;
+    const maxSource = perCourse;
     const currentMax = {
       words: Math.max(1, ...Object.values(maxSource).map(m => m.words || 0)),
       recursion: Math.max(0.1, ...Object.values(maxSource).map(m => m.recursion || 0)),
@@ -4844,6 +4946,17 @@
         segBefore: geomMeta.segBefore ?? geomMeta.segmentsBeforeSanitize ?? segments.length,
         segAfter: geomMeta.segAfter ?? geomMeta.segmentsAfterSanitize ?? segments.length,
         densityCapApplied: geomMeta.densityCapApplied ?? sanitized.densityCapApplied ?? false,
+        redoTriggered: !!(geomMeta.redoTriggered ?? sanitized.redoTriggered),
+        observedMaxDepth: geomMeta.observedMaxDepth ?? geomMeta.depthMaxReached ?? 0,
+        tierEventsFired: geomMeta.tierEventsFired ?? 0,
+        branchSpawns: geomMeta.branchSpawns ?? 0,
+        spawnBlocked: geomMeta.spawnBlocked ?? 0,
+        occAppliedCount: geomMeta.occAppliedCount ?? 0,
+        boundaryAppliedCount: geomMeta.boundaryAppliedCount ?? 0,
+        genCountByDepthBin: geomMeta.genCountByDepthBin || geomMeta.segGenCountByDepth || [],
+        stepLenAvgByDepthBin: geomMeta.stepLenAvgByDepthBin || geomMeta.segGenAvgLenByDepth || [],
+        keptCount: geomMeta.keptCount ?? sanitized.keptCount ?? segments.length,
+        genCount: geomMeta.genCount ?? sanitized.genCount ?? segments.length,
         segKeptCountByDepth: geomMeta.segKeptCountByDepth || [],
         segKeptAvgLenByDepth: geomMeta.segKeptAvgLenByDepth || [],
         horizFrac: segStats.horizFrac,
@@ -4865,10 +4978,13 @@
   }
 
   function renderForestFrame(opts = {}) {
+    if (FOREST_ENGINE !== "v01" && FOREST_ENGINE !== "legacy") {
+      throw new Error("Unknown FOREST_ENGINE: " + FOREST_ENGINE);
+    }
     if (FOREST_ENGINE === "v01") {
       return renderForestV01(opts);
     }
-    return renderForest();
+    return renderForest(opts);
   }
 
   let forestFastFramePending = false;
@@ -4905,8 +5021,91 @@
         console.table(rows);
       });
     };
+
+    window.dumpForestStateSizes = function dumpForestStateSizes() {
+      const byteSize = (val) => {
+        try {
+          if (typeof Blob !== "undefined") return new Blob([String(val)]).size;
+        } catch {}
+        return String(val).length;
+      };
+      const keys = [];
+      let total = 0;
+      let forestTotal = 0;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        const v = localStorage.getItem(k) || "";
+        const sz = byteSize(v);
+        total += sz;
+        const isForest = k.includes("forest") || k.includes("semester_dashboard");
+        if (isForest) forestTotal += sz;
+        keys.push({ key: k, bytes: sz, forest: isForest });
+      }
+      keys.sort((a, b) => b.bytes - a.bytes);
+      const forest = state?.forest || {};
+      const v01Store = state?.forest?.v01 || null;
+      const legacy = state?.forest?.legacy || {};
+      const sizes = {
+        localStorageTotalBytes: total,
+        localStorageForestBytes: forestTotal,
+        storageKeys: keys
+      };
+      const inMemory = {
+        v01GeomCache: forestRuntime?.v01?.geomCache ? forestRuntime.v01.geomCache.size : 0,
+        legacyGeomCache: forestRuntime?.legacy?.geomCache ? forestRuntime.legacy.geomCache.size : 0
+      };
+      const jsonSizes = {
+        forestBytes: byteSize(JSON.stringify(forest)),
+        legacyBytes: byteSize(JSON.stringify(legacy)),
+        v01Bytes: v01Store ? byteSize(JSON.stringify(v01Store)) : 0
+      };
+      console.log("[ForestStateSizes]", { ...sizes, inMemory, jsonSizes });
+      console.table(keys.filter(k => k.forest));
+      return { ...sizes, inMemory, jsonSizes };
+    };
+
+    window.forestV01QA = function forestV01QA() {
+      const rows = Object.values(lastScaleStats || {}).map((s) => {
+        const segGen = s.genCount ?? s.segBefore ?? 0;
+        const segKept = s.keptCount ?? s.segAfter ?? 0;
+        const keepRatio = segGen > 0 ? (segKept / segGen) : 0;
+        return {
+          course: s.courseKey || s.course || "",
+          segGen,
+          segKept,
+          keepRatio: Number(keepRatio.toFixed(3)),
+          observedMaxDepth: s.observedMaxDepth ?? 0,
+          tierEventsFired: s.tierEventsFired ?? 0,
+          branchSpawns: s.branchSpawns ?? 0,
+          spawnBlocked: s.spawnBlocked ?? 0,
+          occAppliedCount: s.occAppliedCount ?? 0,
+          boundaryAppliedCount: s.boundaryAppliedCount ?? 0,
+          redoTriggered: !!s.redoTriggered,
+          densityCapApplied: !!s.densityCapApplied
+        };
+      });
+      console.table(rows);
+      const toggles = [
+        window.V01_DEBUG_DISABLE_OCC ? "occ" : "",
+        window.V01_DEBUG_DISABLE_TIER ? "tier" : "",
+        window.V01_DEBUG_DISABLE_CONE ? "cone" : "",
+        window.V01_DEBUG_DISABLE_DENSITYCAP ? "density" : "",
+        window.V01_DEBUG_DISABLE_SANITIZE_REDO ? "redo" : ""
+      ].filter(Boolean).join("|") || "none";
+      console.log("[V01QA] toggles:", toggles);
+      console.log("[V01QA] To isolate: set all V01_DEBUG_DISABLE_* = true; then re-enable one-by-one.");
+      return rows;
+    };
   }
-  function renderForest() {
+  function renderForest(...args) {
+    if (FOREST_ENGINE === "v01") {
+      throw new Error("Legacy render blocked (FOREST_ENGINE=v01)");
+    }
+    return _renderForest_impl(...args);
+  }
+
+  function _renderForest_impl() {
     if (FOREST_ENGINE === "v01") {
       renderForestV01({ allowRegen: true });
       return;
@@ -4920,6 +5119,7 @@
 
     const { perCourse, mode, weekId } = computeForestMetrics();
     const simulateMax = !!state.forest.simulateMax;
+    const legacy = getLegacyForest();
     const courses = state.courses || [];
     if (!courses.length) {
       ctx.fillStyle = "#8b8c9b";
@@ -4931,9 +5131,9 @@
       return;
     }
 
-    if (state.forest.weekId !== weekId) {
-      state.forest.weekId = weekId;
-      saveState();
+    if (legacy.weekId !== weekId) {
+      legacy.weekId = weekId;
+      saveStateSoon();
       invalidateForestCaches();
     }
 
@@ -4944,11 +5144,11 @@
     const effortAbsByCourse = {};
     let effortTotal = 0;
 
-    state.forest.perCourseMax = state.forest.perCourseMax || {};
+    legacy.perCourseMax = legacy.perCourseMax || {};
     let maxChanged = false;
     courses.forEach((course) => {
       const cur = perCourse[course] || {};
-      const max = state.forest.perCourseMax[course] || {};
+      const max = legacy.perCourseMax[course] || {};
       const updateMax = (key, val) => {
         const v = val || 0;
         if ((max[key] || 0) < v) {
@@ -4963,11 +5163,11 @@
       updateMax("argument", cur.argument);
       updateMax("diversity", cur.diversity);
       updateMax("tasks", cur.tasks);
-      state.forest.perCourseMax[course] = max;
+      legacy.perCourseMax[course] = max;
     });
-    if (maxChanged) saveState();
+    if (maxChanged) saveStateSoon();
 
-    const maxSource = simulateMax ? (state.forest.perCourseMax || {}) : perCourse;
+    const maxSource = simulateMax ? (legacy.perCourseMax || {}) : perCourse;
     const currentMax = {
       words: Math.max(1, ...Object.values(maxSource).map(m => m.words || 0)),
       recursion: Math.max(0.1, ...Object.values(maxSource).map(m => m.recursion || 0)),
@@ -4999,7 +5199,7 @@
     const effectiveSignalsByCourse = {};
     courses.forEach((course) => {
       const metrics = perCourse[course] || { words: 0, recursion: 0, abstraction: 0, cohesion: 0, argument: 0, diversity: 0, tasks: 0, stress: 0 };
-      const maxMetrics = (state.forest.perCourseMax || {})[course] || {};
+      const maxMetrics = (legacy.perCourseMax || {})[course] || {};
       const wordsN = clamp((metrics.words || 0) / currentMax.words, 0, 1);
       const recursionN = clamp((metrics.recursion || 0) / currentMax.recursion, 0, 1);
       const abstractionN = clamp((metrics.abstraction || 0) / currentMax.abstraction, 0, 1);
@@ -7942,7 +8142,7 @@
     el("btnResetWeek").addEventListener("click", () => {
       if (!lastForestGeom) renderForest();
       saveWeeklyArchive(state.forest.weekly);
-      saveGhostSnapshot(state.forest.weekId || currentWeekId());
+      saveGhostSnapshot(getLegacyForest().weekId || currentWeekId());
       state.todayTasks = [];
       state.weekendTasks = [];
       state.todayNotes = "";
@@ -7958,9 +8158,10 @@
       });
       state.llmNoteAnalyses = {};
       state.llmConferenceResponse = "";
-      state.forest.perCourseMax = {};
-      state.forest.weekId = currentWeekId();
-      state.forest.weekly = { weekId: state.forest.weekId, courses: {} };
+      const legacy = getLegacyForest();
+      legacy.perCourseMax = {};
+      legacy.weekId = currentWeekId();
+      state.forest.weekly = { weekId: legacy.weekId, courses: {} };
       saveState();
       invalidateForestCaches();
       renderModeChips();
@@ -8187,7 +8388,7 @@
   // ---------- Init ----------
   // Ensure weekId is set early to support ghost logic without flicker
   const bootWeekId = currentWeekId();
-  if (state.forest.weekId !== bootWeekId) state.forest.weekId = bootWeekId;
+  if (getLegacyForest().weekId !== bootWeekId) getLegacyForest().weekId = bootWeekId;
   getWeeklyStore(bootWeekId);
     hydrateInputs();
   fetchMaineEnvironment();
