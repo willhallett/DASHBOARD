@@ -3964,6 +3964,7 @@
     window.V01_DEBUG_DISABLE_DENSITYCAP = window.V01_DEBUG_DISABLE_DENSITYCAP || false;
     window.V01_DEBUG_DISABLE_SANITIZE_REDO = window.V01_DEBUG_DISABLE_SANITIZE_REDO || false;
     window.V01_DEBUG_DISABLE_COOLDOWN = window.V01_DEBUG_DISABLE_COOLDOWN || false;
+    window.V01_DEBUG_DISABLE_ARCHETYPE = window.V01_DEBUG_DISABLE_ARCHETYPE || false;
     window.V01_DEBUG_SPAWN_HISTO = window.V01_DEBUG_SPAWN_HISTO || false;
   }
 
@@ -4190,14 +4191,84 @@
     const spawnDebug = getV01DebugFlag("V01_DEBUG_SPAWN_HISTO");
     let maxSteps = Math.max(1, Math.round(params.maxSteps || MIN_STEPS));
     const sig = courseSignature(seedKey || "");
-    const grammarType = Math.floor(seededRandom(seedKey || "", "v01-grammar") * 4) % 4;
+    const disableArchetype = getV01DebugFlag("V01_DEBUG_DISABLE_ARCHETYPE");
+    const archScore = clamp(((sig.crownWidth - 0.6) / 1.0) * 0.5 + ((sig.tierSpacing - 0.6) / 1.0) * 0.35 + ((sig.taper - 0.85) / 0.3) * 0.15, 0, 1);
+    const archetypeId = disableArchetype ? 0 : Math.min(5, Math.floor(archScore * 6));
+    const archetypeNames = ["LOW_DOMINANT", "HIGH_DOMINANT", "MID_DOMINANT", "COLUMNAR", "BIMODAL", "APICAL_BLOOM"];
+    const archetypeEnergy = (hN, aId = archetypeId) => {
+      if (disableArchetype) return 1;
+      const x = clamp(hN, 0, 1);
+      const gauss = (c, w) => Math.exp(-((x - c) * (x - c)) / (2 * w * w));
+      switch (aId % 6) {
+        case 0: // LOW_DOMINANT
+          return 0.25 + 0.75 * gauss(0.25, 0.20);
+        case 1: // HIGH_DOMINANT
+          return 0.25 + 0.75 * gauss(0.80, 0.20);
+        case 2: // MID_DOMINANT
+          return 0.25 + 0.75 * gauss(0.55, 0.22);
+        case 3: // COLUMNAR (near-uniform, slightly mid)
+          return 0.6 + 0.4 * gauss(0.5, 0.35);
+        case 4: // BIMODAL
+          return 0.25 + 0.75 * Math.max(gauss(0.25, 0.16), gauss(0.78, 0.16));
+        case 5: // APICAL_BLOOM
+          return 0.25 + 0.75 * smoothstep(0.45, 0.95, x);
+        default:
+          return 0.6;
+      }
+    };
+    const archetypeName = archetypeNames[archetypeId] || `ARCH_${archetypeId}`;
+    const grammarType = Math.floor(seededRandom(seedKey || "", "v01-grammar") * 5) % 5;
     const grammarProfiles = [
       { angleBias: 0.9, curvScale: 0.6, clusterSpread: 0.8 },
       { angleBias: 1.05, curvScale: 0.9, clusterSpread: 1.0 },
       { angleBias: 1.2, curvScale: 1.2, clusterSpread: 1.15 },
-      { angleBias: 0.8, curvScale: 1.0, clusterSpread: 1.3 }
+      { angleBias: 0.8, curvScale: 1.0, clusterSpread: 1.3 },
+      { angleBias: 1.0, curvScale: 0.75, clusterSpread: 1.45 }
     ];
     const grammar = grammarProfiles[grammarType] || grammarProfiles[0];
+    const verticalEnergy = (hN, gType) => {
+      const x = clamp(hN, 0, 1);
+      switch (gType % 5) {
+        case 0: // crown-high
+          return 0.35 + 0.65 * smoothstep(0.35, 0.95, x);
+        case 1: // mid-band
+          return 0.35 + 0.65 * (1 - Math.abs(x - 0.55) / 0.55);
+        case 2: // low-mid plume
+          return 0.35 + 0.65 * smoothstep(0.15, 0.75, x);
+        case 3: // two-stage
+          return 0.35 + 0.65 * Math.max(smoothstep(0.2, 0.5, x), smoothstep(0.6, 0.9, x));
+        case 4: // low-band
+          return 0.35 + 0.65 * smoothstep(0.05, 0.55, x);
+        default:
+          return 0.6;
+      }
+    };
+    const energyField = (hN) => {
+      if (disableArchetype) return 1;
+      const x = clamp(hN, 0, 1);
+      const a = archetypeEnergy(x, archetypeId);
+      const v = verticalEnergy(x, grammarType);
+      return clamp(a * v, 0.15, 1);
+    };
+    const energyProfile = (() => {
+      const samples = 24;
+      let peakN = 0;
+      let maxE = -1;
+      let sumW = 0;
+      let sumHW = 0;
+      let sumHHW = 0;
+      for (let i = 0; i <= samples; i++) {
+        const h = i / samples;
+        const e = energyField(h);
+        if (e > maxE) { maxE = e; peakN = h; }
+        sumW += e;
+        sumHW += h * e;
+        sumHHW += h * h * e;
+      }
+      const mean = sumW > 0 ? (sumHW / sumW) : 0;
+      const variance = sumW > 0 ? Math.max(0, (sumHHW / sumW) - mean * mean) : 0;
+      return { peakN, spread: Math.sqrt(variance) };
+    })();
     const sigCrownN = clamp((sig.crownWidth - 0.6) / 1.0, 0, 1);
     const sigTierN = clamp((sig.tierSpacing - 0.6) / 1.0, 0, 1);
     const sigTaperN = clamp((sig.taper - 0.85) / 0.3, 0, 1);
@@ -4262,8 +4333,8 @@
     const conceptsN = clamp(params.conceptsN ?? 0, 0, 1);
     const linkageN = clamp(params.linkageN ?? 0, 0, 1);
     const diversityN = clamp(params.diversityN ?? 0, 0, 1);
-    const allowMicro = isSimMax || (growthRel > 0.45 && conceptsN > 0.25);
-    maxDepth = allowMicro ? (isSimMax ? 4 : 3) : 2;
+    const allowMicro = true;
+    maxDepth = isSimMax ? 5 : 4;
     let scaffoldBudget = Math.round(clamp(1 + 4 * (0.55 * growthRel + 0.25 * tasksN + 0.20 * linkageN), 1, 20));
     scaffoldBudget = Math.round(scaffoldBudget * lerp(0.85, 1.15, sigTierN));
     scaffoldBudget = clamp(scaffoldBudget, 1, 20);
@@ -4315,15 +4386,54 @@
       if (name === "microTwig") return 3;
       return 0;
     };
+    const stratifiedPickIndices = (totalSteps, count, bins, energyFn, salt, minIdx = 2) => {
+      const maxIdx = Math.max(minIdx, totalSteps - 1);
+      const weights = Array(bins).fill(0);
+      for (let b = 0; b < bins; b++) {
+        const t0 = b / bins;
+        const t1 = (b + 1) / bins;
+        const tMid = (t0 + t1) * 0.5;
+        weights[b] = Math.max(0, energyFn(tMid));
+      }
+      let sum = weights.reduce((a, v) => a + v, 0);
+      if (!(sum > 0)) {
+        sum = bins;
+        for (let b = 0; b < bins; b++) weights[b] = 1;
+      }
+      const raw = weights.map(w => (w / sum) * count);
+      const alloc = raw.map(v => Math.floor(v));
+      let remainder = count - alloc.reduce((a, v) => a + v, 0);
+      if (remainder > 0) {
+        const frac = raw.map((v, i) => ({ i, frac: v - alloc[i], tie: seededRandom(seedKey || "", `${salt}-frac:${i}`) }));
+        frac.sort((a, b) => (b.frac - a.frac) || (b.tie - a.tie));
+        for (let i = 0; i < remainder; i++) alloc[frac[i].i] += 1;
+      }
+      const indices = [];
+      for (let b = 0; b < bins; b++) {
+        const c = alloc[b];
+        if (!c) continue;
+        const start = Math.floor((b / bins) * totalSteps);
+        const end = Math.floor(((b + 1) / bins) * totalSteps) - 1;
+        const span = Math.max(1, end - start + 1);
+        const spacing = span / (c + 1);
+        for (let j = 0; j < c; j++) {
+          const jitter = (seededRandom(seedKey || "", `${salt}-jit:${b}:${j}`) * 2 - 1) * Math.max(1, spacing * 0.35);
+          const idx = Math.round(start + (j + 1) * spacing + jitter);
+          indices.push(clamp(idx, minIdx, maxIdx));
+        }
+      }
+      indices.sort((a, b) => a - b);
+      return { indices, alloc };
+    };
     const scaffoldSchedule = new Set();
+    let scaffoldBinAlloc = [];
+    const twigBinAllocAcc = Array(10).fill(0);
     if (scaffoldBudget > 0) {
       const scheduleSpan = Math.max(8, trunkStepsTotal);
-      const baseSpacing = Math.max(4, Math.floor(scheduleSpan / (scaffoldBudget + 1)));
-      for (let i = 0; i < scaffoldBudget; i++) {
-        const jitter = Math.round((seededRandom(seedKey || "", `scaf-jit:${i}`) * 2 - 1) * Math.max(1, baseSpacing * 0.35));
-        const idx = clamp(Math.round((i + 1) * baseSpacing + jitter), minBranchStep, Math.max(minBranchStep, scheduleSpan - 2));
-        scaffoldSchedule.add(idx);
-      }
+      const energyFn = (t) => energyField(t);
+      const pick = stratifiedPickIndices(scheduleSpan, scaffoldBudget, 12, energyFn, "scaf", minBranchStep);
+      scaffoldBinAlloc = pick.alloc;
+      pick.indices.forEach(idx => scaffoldSchedule.add(idx));
     }
     const twigPerScaffold = Math.max(5, Math.round(twigBudget / Math.max(1, scaffoldBudget || 1)));
     const spawnKey = (depthVal, yVal) => {
@@ -4450,7 +4560,14 @@
         if (state.stepsLeft > twigStepsLeft) state.stepsLeft = twigStepsLeft;
       }
       let dir = state.dir;
-      dir = lerpVec(dir, up, tropism);
+      const xC = state.x + baseX;
+      const yC = state.y + baseY;
+      const heightN = clamp((baseY - yC) / Math.max(1, baseY), 0, 1);
+      const heightNEnergy = clamp(heightN * 1.2, 0, 1);
+      const combinedEnergy = energyField(heightNEnergy);
+      const combinedEnergyUp = combinedEnergy;
+      const tropismLocal = tropism * lerp(0.85, 1.15, combinedEnergy) * lerp(1.0, 0.7, heightN);
+      dir = lerpVec(dir, up, tropismLocal);
       const noise = (stepRand(`${seedKey}|${state.branchId}`, stepIndex + depth * 1000, "noise") * 2 - 1) * jitterRad;
       state.angVel = 0.85 * state.angVel + 0.15 * noise;
       dir = rotateVec(dir, state.angVel);
@@ -4459,16 +4576,19 @@
       let stepLen = baseLen * Math.pow(decay, depth);
       if (state.className === "scaffold") stepLen *= 1.2;
       if (state.className === "twig") stepLen *= 1.1;
+      if (state.className === "scaffold" || state.className === "twig" || state.className === "microTwig") {
+        stepLen *= lerp(0.9, 1.1, combinedEnergy);
+      }
       const dN = maxDepth > 0 ? clamp(classDepth / maxDepth, 0, 1) : 0;
       const stepBoost = isSimMax ? lerp(1.0, 1.8, Math.pow(dN, 1.1)) : lerp(1.0, 1.3, Math.pow(dN, 1.1));
       stepLen *= stepBoost;
       const minStep = isSimMax ? lerp(0.8, 2.0, dN) : lerp(0.6, 1.4, dN);
       stepLen = Math.max(stepLen, minStep);
       let dirAngle = Math.atan2(dir.y, dir.x);
-      const xC = state.x + baseX;
-      const yC = state.y + baseY;
       const baseTurn = (stepRand(`${seedKey}|${state.branchId}`, stepIndex, "baseTurn") * 2 - 1) * wind.baseTurnRate;
-      const noiseTurn = noise1D(seedKey, state.branchId || 0, stepIndex, wind.noiseScale) * wind.noiseAmp;
+      let noiseTurn = noise1D(seedKey, state.branchId || 0, stepIndex, wind.noiseScale) * wind.noiseAmp;
+      if (cls !== "trunk") noiseTurn *= lerp(0.9, 1.15, combinedEnergy);
+      if (cls === "microTwig") noiseTurn *= 1.08;
       const topEdge = yC;
       const minDist = topEdge;
       const band = Math.max(1, wind.boundaryBand || 1);
@@ -4553,7 +4673,8 @@
       if (clsUse === "scaffold") { scaffoldLenSum += len; scaffoldLenCount += 1; }
       if (clsUse === "twig" || clsUse === "microTwig") { twigLenSum += len; twigLenCount += 1; }
       const taperBoost = (clsUse === "scaffold") ? 0.3 : (clsUse === "twig") ? 0.9 : (clsUse === "microTwig") ? 1.4 : 0;
-      const depthRender = Math.min(maxDepth, classDepth + taperBoost);
+      const taperEnergy = (clsUse === "trunk") ? 1 : lerp(0.85, 1.25, combinedEnergy);
+      const depthRender = Math.min(maxDepth, classDepth + taperBoost * taperEnergy);
       segments.push({ x1: state.x, y1: state.y, x2: nx, y2: ny, depth: depthRender, branchId: state.branchId, parentId: state.parentId, len, className: clsUse });
       const dbi = Math.min(depthBins - 1, Math.floor(dN * depthBins));
       segGenCountByDepth[dbi] += 1;
@@ -4603,9 +4724,11 @@
               guard += 1;
             }
             const spreadBase = Math.max(2, Math.floor((bSteps * 0.08) * grammar.clusterSpread));
+            const twigEnergyFn = (t) => energyField(clamp(heightN + t * 0.6, 0, 1));
+            const centersPick = stratifiedPickIndices(bSteps, clusterCount, 10, twigEnergyFn, `twigc:${branchSerial}`, 2);
+            centersPick.alloc.forEach((v, i) => { twigBinAllocAcc[i] += v; });
             for (let c = 0; c < clusterCount; c++) {
-              const centerJitter = Math.round((seededRandom(seedKey || "", `twig-cl-center:${branchSerial}:${c}`) * 2 - 1) * Math.max(1, spreadBase));
-              const center = clamp(Math.round(((c + 1) / (clusterCount + 1)) * bSteps + centerJitter), 2, Math.max(2, bSteps - 1));
+              const center = centersPick.indices[c] ?? clamp(Math.round((c + 1) / (clusterCount + 1) * bSteps), 2, Math.max(2, bSteps - 1));
               const count = clusterSizes[c];
               const span = Math.max(1, Math.floor(spreadBase * 0.6));
               for (let j = 0; j < count; j++) {
@@ -4616,6 +4739,7 @@
               }
             }
             const newBranchId = ++branchSerial;
+            const energy = combinedEnergyUp;
             const branchState = {
               x: state.x,
               y: state.y,
@@ -4627,7 +4751,7 @@
               parentId: state.branchId,
               className: "scaffold",
               localStep: 0,
-              curvBias: (seededRandom(seedKey || "", `scaf-curv:${newBranchId}`) * 2 - 1) * lerp(0.002, 0.01, grammar.curvScale),
+              curvBias: (seededRandom(seedKey || "", `scaf-curv:${newBranchId}`) * 2 - 1) * lerp(0.002, 0.01, grammar.curvScale) * lerp(0.7, 1.3, energy),
               curvVel: 0,
               twigSchedule,
               twigIndex: 0
@@ -4652,6 +4776,16 @@
       if (!branchedNow && !noSignal && state.className === "scaffold" && Array.isArray(state.twigSchedule) && state.twigIndex < state.twigSchedule.length && budgetLeft > 2 && twigStepsLeft > 0) {
         const targetStep = state.twigSchedule[state.twigIndex];
         if (state.localStep >= targetStep && classDepth < maxDepth) {
+          const energy = combinedEnergyUp;
+          const energyProb = lerp(0.82, 1.0, energy);
+          const eRoll = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-energy");
+          state.twigDefers = state.twigDefers || 0;
+          if (eRoll > energyProb && state.twigDefers < 6) {
+            state.twigDefers += 1;
+            recordSpawn(yC, classDepthFor("twig"), false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+            branchedNow = true;
+          } else {
+            state.twigDefers = 0;
           const twigAngle = lerp(20, 38, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-ang")) * (Math.PI / 180) * sig.crownWidth;
           const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "twig-sign") < 0.5 ? -1 : 1;
           const tDirRaw = rotateVec(dir, sign * twigAngle);
@@ -4696,12 +4830,23 @@
           depthMaxReached = Math.max(depthMaxReached, state.depth);
           branchedNow = true;
           recordSpawn(yC, classDepthFor("twig"), true);
+          }
         }
       }
 
       if (!branchedNow && !noSignal && state.className === "twig" && Array.isArray(state.microSchedule) && state.microIndex < state.microSchedule.length && budgetLeft > 1 && twigStepsLeft > 0) {
         const targetStep = state.microSchedule[state.microIndex];
         if (state.localStep >= targetStep && classDepth < maxDepth) {
+          const energy = combinedEnergyUp;
+          const energyProb = lerp(0.82, 1.0, energy);
+          const eRoll = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-energy");
+          state.microDefers = state.microDefers || 0;
+          if (eRoll > energyProb && state.microDefers < 6) {
+            state.microDefers += 1;
+            recordSpawn(yC, classDepthFor("microTwig"), false, { cooldown: true, occ: occAppliedThisStep, coneClamp: !disableCone });
+            branchedNow = true;
+          } else {
+            state.microDefers = 0;
           const microAngle = lerp(16, 32, stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-ang")) * (Math.PI / 180);
           const sign = stepRand(`${seedKey}|${state.branchId}`, stepIndex, "micro-sign") < 0.5 ? -1 : 1;
           const mDirRaw = rotateVec(dir, sign * microAngle);
@@ -4733,6 +4878,7 @@
           depthMaxReached = Math.max(depthMaxReached, state.depth);
           branchedNow = true;
           recordSpawn(yC, classDepthFor("microTwig"), true);
+          }
         }
       }
 
@@ -4805,6 +4951,12 @@
         classCounts,
         classShares,
         grammarType,
+        archetypeId,
+        archetypeName,
+        energyPeakN: energyProfile.peakN,
+        energySpread: energyProfile.spread,
+        scaffoldBinAlloc,
+        twigBinAlloc: twigBinAllocAcc,
         sigLean: sig.lean,
         sigCrownWidth: sig.crownWidth,
         sigTierSpacing: sig.tierSpacing,
@@ -4906,6 +5058,12 @@
       classCounts: gen.meta?.classCounts || {},
       classShares: gen.meta?.classShares || {},
       grammarType: gen.meta?.grammarType ?? 0,
+      archetypeId: gen.meta?.archetypeId ?? 0,
+      archetypeName: gen.meta?.archetypeName ?? "",
+      energyPeakN: gen.meta?.energyPeakN ?? 0,
+      energySpread: gen.meta?.energySpread ?? 0,
+      scaffoldBinAlloc: gen.meta?.scaffoldBinAlloc || [],
+      twigBinAlloc: gen.meta?.twigBinAlloc || [],
       branchIdCount,
       segmentsBeforeSanitize,
       segmentsAfterSanitize,
@@ -5260,6 +5418,12 @@
         classCounts: geomMeta.classCounts || {},
         classShares: geomMeta.classShares || {},
         grammarType: geomMeta.grammarType ?? 0,
+        archetypeId: geomMeta.archetypeId ?? 0,
+        archetypeName: geomMeta.archetypeName ?? "",
+        energyPeakN: geomMeta.energyPeakN ?? 0,
+        energySpread: geomMeta.energySpread ?? 0,
+        scaffoldBinAlloc: geomMeta.scaffoldBinAlloc || [],
+        twigBinAlloc: geomMeta.twigBinAlloc || [],
         genCountByDepthBin: geomMeta.genCountByDepthBin || geomMeta.segGenCountByDepth || [],
         stepLenAvgByDepthBin: geomMeta.stepLenAvgByDepthBin || geomMeta.segGenAvgLenByDepth || [],
         keptCount: geomMeta.keptCount ?? sanitized.keptCount ?? segments.length,
@@ -5396,6 +5560,11 @@
           classCounts: JSON.stringify(s.classCounts || {}),
           classShares: JSON.stringify(s.classShares || {}),
           grammarType: s.grammarType ?? 0,
+          archetype: s.archetypeName ? `${s.archetypeId ?? 0}:${s.archetypeName}` : (s.archetypeId ?? 0),
+          energyPeakN: Number((s.energyPeakN ?? 0).toFixed(2)),
+          energySpread: Number((s.energySpread ?? 0).toFixed(2)),
+          scaffoldBinAlloc: JSON.stringify(s.scaffoldBinAlloc || []),
+          twigBinAlloc: JSON.stringify(s.twigBinAlloc || []),
           branchSpawns: s.branchSpawns ?? 0,
           spawnBlocked: s.spawnBlocked ?? 0,
           occAppliedCount: s.occAppliedCount ?? 0,
@@ -5413,6 +5582,7 @@
         window.V01_DEBUG_DISABLE_OCC ? "occ" : "",
         window.V01_DEBUG_DISABLE_TIER ? "tier" : "",
         window.V01_DEBUG_DISABLE_CONE ? "cone" : "",
+        window.V01_DEBUG_DISABLE_ARCHETYPE ? "arch" : "",
         window.V01_DEBUG_DISABLE_DENSITYCAP ? "density" : "",
         window.V01_DEBUG_DISABLE_SANITIZE_REDO ? "redo" : ""
       ].filter(Boolean).join("|") || "none";
