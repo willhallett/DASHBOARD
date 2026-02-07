@@ -2574,7 +2574,7 @@
 
   function forestCardDataUrl(mime = "image/jpeg", quality = 0.92, scale = 1) {
     try {
-      renderForest();
+      renderForestFrame();
       const src = forestCanvas;
       if (!src) return "";
       const rect = src.getBoundingClientRect();
@@ -5306,7 +5306,7 @@
 
     const seedSalt = getUserSeedSalt();
     const weekStartKey = isoWeekStartKey(weekId);
-    const dayKey = etDateKey();
+    const snapshotKey = weekStartKey;
     const modeKey = focusMode || "grid";
 
     const padL = 50;
@@ -5383,7 +5383,7 @@
       const targetFrac = lerp(0.18, 0.78, smoothstep(0, 1, growthRel));
       const maxSteps = simulateMax ? MAX_STEPS : Math.round(MIN_STEPS + (MAX_STEPS - MIN_STEPS) * growthRel);
       const noSignal = simulateMax ? false : (((metrics.words | 0) === 0) && ((metrics.tasks | 0) === 0));
-      const seedKey = `${ck}|${weekStartKey}|${dayKey}|v01|${seedSalt}`;
+      const seedKey = `${ck}|${weekStartKey}|v01|${seedSalt}`;
       const signalsHash = forestSignalsHash({ ...effectiveSignals, weekendRel, growthRel, effortAbs: computeEffortAbs(effectiveSignals.tasks || 0, effectiveSignals.writingDays || 0, effectiveSignals.words || 0) });
 
       let params = {
@@ -5404,11 +5404,11 @@
       let geomSource = "fallback";
       let regenNeeded = false;
       if (!simulateMax) {
-        snapshot = getV01Snapshot(weekId, ck, dayKey);
+        snapshot = getV01Snapshot(weekId, ck, snapshotKey);
         regenNeeded = !snapshot || snapshot.signalsHash !== signalsHash;
         if (allowRegen && regenNeeded) {
           const snap = { signalsHash, seed: seedKey, params };
-          setV01Snapshot(weekId, ck, dayKey, snap);
+          setV01Snapshot(weekId, ck, snapshotKey, snap);
           snapshot = snap;
           saveStateSoon();
         }
@@ -5423,7 +5423,7 @@
       }
 
       const cacheSignalsHash = (!simulateMax && snapshot?.signalsHash) ? snapshot.signalsHash : signalsHash;
-      const cacheKey = getGeomCacheKeyV01({ ck, weekId, dayKey, modeKey, simulateMax, signalsHash: cacheSignalsHash });
+      const cacheKey = getGeomCacheKeyV01({ ck, weekId, dayKey: snapshotKey, modeKey, simulateMax, signalsHash: cacheSignalsHash });
       const forceRegen = allowRegen && getV01DebugFlag("V01_DEBUG_SPAWN_HISTO");
       let geom = forceRegen ? null : geomCacheV01.get(cacheKey);
       if (!geom && allowRegen) {
@@ -8754,7 +8754,6 @@
       const store = getWeeklyStore(currentWeekId());
       Object.keys(state.courseNotes || {}).forEach((course) => {
         state.courseNotes[course].notes = "";
-        state.courseNotes[course].analysis = null;
         if (store?.courses?.[course]?.days) delete store.courses[course].days[dayKey];
       });
       Object.keys(store?.courses || {}).forEach((course) => {
